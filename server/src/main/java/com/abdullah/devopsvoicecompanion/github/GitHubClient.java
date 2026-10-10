@@ -1,3 +1,5 @@
 package com.abdullah.devopsvoicecompanion.github;
 
-public class githubClient {}
+public class GitHubClient {
+
+}
