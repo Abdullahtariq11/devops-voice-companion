@@ -26,7 +26,7 @@ Voice (Alexa+) → MCP tools (Spring Boot) → GitHub Actions API (build status,
 ## Roadmap
 
 - [x] Repo + plan
-- [ ] Phase 0: Scaffold, hello-world MCP tool, Railway deploy
+- [x] Phase 0: Scaffold, hello-world MCP tool, Railway deploy
 - [ ] Phase 1: GitHub Actions tools (build status, failed runs, logs)
 - [ ] Phase 2: Bedrock failure summarization
 - [ ] Phase 3: Alexa+ integration via Alexa+ for Builders
