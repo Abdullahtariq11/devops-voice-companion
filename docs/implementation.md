@@ -7,6 +7,7 @@
 | `get_build_status` | `owner`, `repo` | Latest run status, branch, and relative time, with friendly messages for common GitHub errors. |
 | `get_failed_runs` | `owner`, `repo`, optional `limit` | Recent failed runs with IDs, branches, and relative times. Defaults to five and accepts one to five results. |
 | `get_failure_logs` | `owner`, `repo`, `runId` | Failed or timed-out jobs, failed steps, and bounded log excerpts for a run's latest attempt. |
+| `summarize_failure` | `owner`, `repo`, `runId` | Collects failure evidence and asks Bedrock Nova Lite for a short explanation. Validation errors, GitHub errors, and empty results bypass the model. |
 
 The Spring AI BOM manages dependency versions. The MCP WebMVC starter registers the
 annotated `BuildTools` methods and exposes them over Streamable HTTP at `/mcp`.
@@ -44,15 +45,21 @@ three-second connection timeout and a five-second read timeout per request.
 
 ## Local verification
 
-Run the server from `server`:
+Run the server from `server` using an AWS profile with Bedrock invocation access:
 
 ```bash
-./mvnw spring-boot:run
+AWS_PROFILE=abdullah-dev AWS_REGION=us-east-2 ./mvnw spring-boot:run
 ```
+
+Use your own profile name if it differs. AWS credentials stay in the local AWS
+configuration, not in application source. The summarizer uses `amazon.nova-lite-v1:0`.
 
 Connect MCP Inspector using Streamable HTTP and `http://localhost:8080/mcp`.
 Call `get_failed_runs`, then pass one returned run ID as `runId` to `get_failure_logs`.
 Restart the app and reconnect Inspector after changing tool code.
+Call `summarize_failure` with the same inputs to generate a model response. Missing
+logs still allow a summary of the failed-job metadata, with instructions to explain
+uncertainty. Model output length and wording are guided by the prompt, not strictly enforced.
 
 Run the tests from `server`:
 
@@ -64,9 +71,21 @@ Tests cover application startup, log downloads without forwarding authorization,
 log truncation, rejection of non-HTTPS download URLs, missing logs, preservation of
 failed-step details, filtering out successful jobs, and the combined output cap.
 HTTP behavior is tested with mock responses rather than live GitHub requests.
+Summary orchestration tests also mock Bedrock, checking evidence forwarding, bypass
+behavior, missing logs, SDK failures, and empty model responses.
+
+The separate live Bedrock smoke test is disabled by default. Enable it explicitly:
+
+```bash
+AWS_PROFILE=abdullah-dev AWS_REGION=us-east-2 RUN_BEDROCK_TESTS=true \
+  ./mvnw -Dtest=BedrockSummarizerTests test
+```
+
+This makes a billable request with sample failure details; it does not verify live
+GitHub log downloads or the full MCP-to-Bedrock flow.
 
 ## Still to add
 
-- Amazon Bedrock Nova Lite integration and the `summarize_failure` tool.
+- End-to-end verification of `summarize_failure` through MCP with live GitHub evidence.
 - Alexa+ integration and end-to-end voice testing.
 - More targeted excerpts so errors later in long logs are available for summarization.

@@ -10,14 +10,15 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
+import software.amazon.awssdk.core.exception.SdkException;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.stream.Collectors;
 
 /**
- * Exposes GitHub Actions status, recent failures, and failure details as MCP tools.
- * Log output is intended for analysis before producing a spoken summary.
+ * Exposes GitHub Actions status, recent failures, and failure details as MCP tools. Log output is
+ * intended for analysis before producing a spoken summary.
  */
 @Component
 public class BuildTools {
@@ -28,6 +29,7 @@ public class BuildTools {
    * Creates tools backed by the GitHub API client.
    *
    * @param gitHubClient client supplied by Spring
+   * @param bedrockSummarizer service that explains failures using Nova Lite
    */
   public BuildTools(GitHubClient gitHubClient, BedrockSummarizer bedrockSummarizer) {
     this.gitHubClient = gitHubClient;
@@ -35,9 +37,8 @@ public class BuildTools {
   }
 
   /**
-   * Describes the latest build using speakable status and relative timing.
-   * Completed runs use their last update as an approximate completion time;
-   * active runs use their creation time.
+   * Describes the latest build using speakable status and relative timing. Completed runs use their
+   * last update as an approximate completion time; active runs use their creation time.
    *
    * @param owner GitHub account or organization
    * @param repo repository name without the owner
@@ -157,23 +158,33 @@ public class BuildTools {
         return "No failed builds found for " + owner + "/" + repo + ".";
       }
 
-      String details = runs.stream()
-          .map(run -> "Run " + run.id() + ": branch " + run.headBranch()
-              + ", " + relativeTime(run.updatedAt()))
-          .collect(Collectors.joining(". "));
+      String details =
+          runs.stream()
+              .map(
+                  run ->
+                      "Run "
+                          + run.id()
+                          + ": branch "
+                          + run.headBranch()
+                          + ", "
+                          + relativeTime(run.updatedAt()))
+              .collect(Collectors.joining(". "));
 
       return "Recent failed builds on " + owner + "/" + repo + ": " + details + ".";
     } catch (RestClientException exception) {
       return "I couldn't retrieve failed builds for "
-          + owner + "/" + repo + ". Please try again later.";
+          + owner
+          + "/"
+          + repo
+          + ". Please try again later.";
     }
   }
 
   /**
-   * Collects failed or timed-out jobs and steps from the run's latest attempt.
-   * Includes up to five jobs and the first 1500 log characters per job, with total output
-   * capped at 10000 characters. Job metadata is retained when a log download fails.
-   * Excerpts may omit errors that occur later in a long log and are not a spoken summary.
+   * Collects failed or timed-out jobs and steps from the run's latest attempt. Includes up to five
+   * jobs and the first 1500 log characters per job, with total output capped at 10000 characters.
+   * Job metadata is retained when a log download fails. Excerpts may omit errors that occur later
+   * in a long log and are not a spoken summary.
    *
    * @param owner GitHub account or organization
    * @param repo repository name without the owner
@@ -182,42 +193,102 @@ public class BuildTools {
    */
   @McpTool(
       name = "get_failure_logs",
-      description = "Get failed jobs, failed steps, and log excerpts for a GitHub Actions run. "
-          + "For analysis, not for reading aloud. Output is capped at 10000 characters.")
+      description =
+          "Get failed jobs, failed steps, and log excerpts for a GitHub Actions run. "
+              + "For analysis, not for reading aloud. Output is capped at 10000 characters.")
   public String getFailureLogs(
       @McpToolParam(description = "GitHub owner or organization", required = true) String owner,
       @McpToolParam(description = "Repository name", required = true) String repo,
-      @McpToolParam(description = "Workflow run ID from get_failed_runs", required = true) long runId) {
-    if (runId < 1) {
-      return "Please provide a positive workflow run ID.";
+      @McpToolParam(description = "Workflow run ID from get_failed_runs", required = true)
+          long runId) {
+    return collectFailureDetails(owner, repo, runId).text();
+  }
+
+  /**
+   * Explains a workflow failure using GitHub evidence and Nova Lite.
+   * Errors and empty job results bypass Bedrock. Missing logs still allow a summary
+   * based on the available failed-job metadata.
+   *
+   * @param owner GitHub account or organization
+   * @param repo repository name without the owner
+   * @param runId workflow run ID from {@code get_failed_runs}
+   * @return spoken summary or a friendly error message
+   */
+  @McpTool(
+      name = "summarize_failure",
+      description = "Explain why a GitHub Actions run failed in a short spoken summary")
+  public String summarizeFailure(
+      @McpToolParam(description = "GitHub owner or organization", required = true) String owner,
+      @McpToolParam(description = "Repository name", required = true) String repo,
+      @McpToolParam(description = "Workflow run ID", required = true) long runId) {
+    FailureDetails details = collectFailureDetails(owner, repo, runId);
+
+    if (!details.summarizable()) {
+      return details.text();
     }
 
     try {
-      var failedJobs = gitHubClient.getJobs(owner, repo, runId).stream()
-          .filter(job -> "failure".equals(job.conclusion())
-              || "timed_out".equals(job.conclusion()))
-          .toList();
+      String summary = bedrockSummarizer.summarize(owner + "/" + repo, details.text());
+      if (summary == null || summary.isBlank()) {
+        return "The failure summary was empty. Please try again.";
+      }
+      return summary;
+    } catch (SdkException exception) {
+      return "I found failure details for " + owner + "/" + repo
+          + ", but couldn't generate a summary. Please try again later.";
+    }
+  }
+
+  /**
+   * Collects bounded failure evidence for reuse by log and summary tools.
+   * Validation errors, empty results, and GitHub request failures bypass summarization.
+   * Failed-job metadata remains summarizable even when individual logs are unavailable.
+   *
+   * @param owner GitHub account or organization
+   * @param repo repository name without the owner
+   * @param runId positive workflow run ID
+   * @return failure evidence or a message marked to bypass Bedrock
+   */
+  private FailureDetails collectFailureDetails(String owner, String repo, long runId) {
+    if (runId < 1) {
+      return new FailureDetails("Please provide a positive workflow run ID.", false);
+    }
+
+    try {
+      var failedJobs =
+          gitHubClient.getJobs(owner, repo, runId).stream()
+              .filter(
+                  job -> "failure".equals(job.conclusion()) || "timed_out".equals(job.conclusion()))
+              .toList();
       if (failedJobs.isEmpty()) {
-        return "No failed jobs found for run " + runId + " on " + owner + "/" + repo + ".";
+        return new FailureDetails(
+            "No failed jobs found for run " + runId + " on " + owner + "/" + repo + ".", false);
       }
 
-      StringBuilder output = new StringBuilder("Failure details for " + owner + "/" + repo
-          + ", run " + runId + ".\n");
+      StringBuilder output =
+          new StringBuilder("Failure details for " + owner + "/" + repo + ", run " + runId + ".\n");
       for (GitHubJob job : failedJobs.stream().limit(5).toList()) {
-        output.append("\nJob: ").append(job.name()).append(" (")
-            .append(job.conclusion()).append(")\n");
+        output
+            .append("\nJob: ")
+            .append(job.name())
+            .append(" (")
+            .append(job.conclusion())
+            .append(")\n");
         if (job.steps() != null) {
           job.steps().stream()
-              .filter(step -> "failure".equals(step.conclusion())
-                  || "timed_out".equals(step.conclusion()))
+              .filter(
+                  step ->
+                      "failure".equals(step.conclusion()) || "timed_out".equals(step.conclusion()))
               .forEach(step -> output.append("Failed step: ").append(step.name()).append('\n'));
         }
         try {
           if (job.id() == null) {
             output.append("Logs unavailable: missing job ID.\n");
           } else {
-            output.append("Log excerpt:\n")
-                .append(gitHubClient.getJobLogs(owner, repo, job.id(), 1500)).append('\n');
+            output
+                .append("Log excerpt:\n")
+                .append(gitHubClient.getJobLogs(owner, repo, job.id(), 1500))
+                .append('\n');
           }
         } catch (RestClientException exception) {
           output.append("Logs unavailable. They may have expired or access may be restricted.\n");
@@ -230,21 +301,29 @@ public class BuildTools {
         output.append("\nOnly the first five failed jobs are included.");
       }
       if (output.length() > 10_000) {
-        return output.substring(0, 9981) + "\n[Output truncated]";
+        return new FailureDetails(output.substring(0, 9981) + "\n[Output truncated]", true);
       }
-      return output.toString();
+      return new FailureDetails(output.toString(), true);
     } catch (HttpClientErrorException.NotFound exception) {
-      return "I couldn't find run " + runId + " on " + owner + "/" + repo
-          + ". Check the run ID and repository access.";
+      return new FailureDetails("I couldn't find run "
+          + runId
+          + " on "
+          + owner
+          + "/"
+          + repo
+          + ". Check the run ID and repository access.", false);
     } catch (RestClientException exception) {
-      return "I couldn't retrieve failed jobs for " + owner + "/" + repo
-          + ". Check GitHub access or try again later.";
+      return new FailureDetails("I couldn't retrieve failed jobs for "
+          + owner
+          + "/"
+          + repo
+          + ". Check GitHub access or try again later.", false);
     }
   }
 
   /**
-   * Formats elapsed time in whole minutes, hours, or days, using the current clock.
-   * Timestamps less than a minute old or in the future produce {@code just now}.
+   * Formats elapsed time in whole minutes, hours, or days, using the current clock. Timestamps less
+   * than a minute old or in the future produce {@code just now}.
    *
    * @param timestamp time to compare with now, or {@code null}
    * @return relative time phrase, or an empty string for a missing timestamp
@@ -272,4 +351,12 @@ public class BuildTools {
     long days = hours / 24;
     return days + (days == 1 ? " day ago" : " days ago");
   }
+
+  /**
+   * Separates failure evidence from messages that should bypass Bedrock.
+   *
+   * @param text failure details or a user-facing message
+   * @param summarizable whether the text contains failure evidence
+   */
+  private record FailureDetails(String text, boolean summarizable) {}
 }
