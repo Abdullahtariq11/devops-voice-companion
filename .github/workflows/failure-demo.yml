@@ -1,0 +1,16 @@
+name: Failure log demo
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  demo-failure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run demo tests
+        run: |
+          echo "PaymentServiceTest failed."
+          echo "Expected payment total: 100. Actual payment total: 90."
+          exit 1
