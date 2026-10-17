@@ -1,25 +1,45 @@
 package com.abdullah.devopsvoicecompanion.tools;
 
 import com.abdullah.devopsvoicecompanion.github.GitHubClient;
+import com.abdullah.devopsvoicecompanion.github.GitHubJob;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.stream.Collectors;
 
+/**
+ * Exposes GitHub Actions status, recent failures, and failure details as MCP tools.
+ * Log output is intended for analysis before producing a spoken summary.
+ */
 @Component
 public class BuildTools {
   private final GitHubClient gitHubClient;
 
+  /**
+   * Creates tools backed by the GitHub API client.
+   *
+   * @param gitHubClient client supplied by Spring
+   */
   public BuildTools(GitHubClient gitHubClient) {
     this.gitHubClient = gitHubClient;
   }
 
-  /** */
+  /**
+   * Describes the latest build using speakable status and relative timing.
+   * Completed runs use their last update as an approximate completion time;
+   * active runs use their creation time.
+   *
+   * @param owner GitHub account or organization
+   * @param repo repository name without the owner
+   * @return build description, no-runs message, or friendly message for handled GitHub errors
+   */
   @McpTool(
       name = "get_build_status",
       description = "Get the latest GitHub Actions build status for a repository")
@@ -106,7 +126,126 @@ public class BuildTools {
     }
   }
 
-  /** */
+  /**
+   * Lists recent failed builds with IDs that can be passed to {@link #getFailureLogs}.
+   *
+   * @param owner GitHub account or organization
+   * @param repo repository name without the owner
+   * @param limit maximum builds to return, from 1 to 5; {@code null} defaults to 5
+   * @return failure listing, empty-result message, validation message, or friendly HTTP error
+   */
+  @McpTool(
+      name = "get_failed_runs",
+      description = "Get recent failed GitHub Actions builds for a repository")
+  public String getFailedRuns(
+      @McpToolParam(description = "GitHub owner or organization", required = true) String owner,
+      @McpToolParam(description = "Repository name", required = true) String repo,
+      @McpToolParam(description = "Number of failed builds, from 1 to 5. Defaults to 5")
+          Integer limit) {
+    int requestedLimit = limit == null ? 5 : limit;
+    if (requestedLimit < 1 || requestedLimit > 5) {
+      return "Please request between 1 and 5 failed builds.";
+    }
+
+    try {
+      var runs = gitHubClient.getFailedRuns(owner, repo, requestedLimit);
+
+      if (runs.isEmpty()) {
+        return "No failed builds found for " + owner + "/" + repo + ".";
+      }
+
+      String details = runs.stream()
+          .map(run -> "Run " + run.id() + ": branch " + run.headBranch()
+              + ", " + relativeTime(run.updatedAt()))
+          .collect(Collectors.joining(". "));
+
+      return "Recent failed builds on " + owner + "/" + repo + ": " + details + ".";
+    } catch (RestClientException exception) {
+      return "I couldn't retrieve failed builds for "
+          + owner + "/" + repo + ". Please try again later.";
+    }
+  }
+
+  /**
+   * Collects failed or timed-out jobs and steps from the run's latest attempt.
+   * Includes up to five jobs and the first 1500 log characters per job, with total output
+   * capped at 10000 characters. Job metadata is retained when a log download fails.
+   * Excerpts may omit errors that occur later in a long log and are not a spoken summary.
+   *
+   * @param owner GitHub account or organization
+   * @param repo repository name without the owner
+   * @param runId positive workflow run ID, available from {@code get_failed_runs}
+   * @return failure details or a friendly validation, empty-result, or HTTP error message
+   */
+  @McpTool(
+      name = "get_failure_logs",
+      description = "Get failed jobs, failed steps, and log excerpts for a GitHub Actions run. "
+          + "For analysis, not for reading aloud. Output is capped at 10000 characters.")
+  public String getFailureLogs(
+      @McpToolParam(description = "GitHub owner or organization", required = true) String owner,
+      @McpToolParam(description = "Repository name", required = true) String repo,
+      @McpToolParam(description = "Workflow run ID from get_failed_runs", required = true) long runId) {
+    if (runId < 1) {
+      return "Please provide a positive workflow run ID.";
+    }
+
+    try {
+      var failedJobs = gitHubClient.getJobs(owner, repo, runId).stream()
+          .filter(job -> "failure".equals(job.conclusion())
+              || "timed_out".equals(job.conclusion()))
+          .toList();
+      if (failedJobs.isEmpty()) {
+        return "No failed jobs found for run " + runId + " on " + owner + "/" + repo + ".";
+      }
+
+      StringBuilder output = new StringBuilder("Failure details for " + owner + "/" + repo
+          + ", run " + runId + ".\n");
+      for (GitHubJob job : failedJobs.stream().limit(5).toList()) {
+        output.append("\nJob: ").append(job.name()).append(" (")
+            .append(job.conclusion()).append(")\n");
+        if (job.steps() != null) {
+          job.steps().stream()
+              .filter(step -> "failure".equals(step.conclusion())
+                  || "timed_out".equals(step.conclusion()))
+              .forEach(step -> output.append("Failed step: ").append(step.name()).append('\n'));
+        }
+        try {
+          if (job.id() == null) {
+            output.append("Logs unavailable: missing job ID.\n");
+          } else {
+            output.append("Log excerpt:\n")
+                .append(gitHubClient.getJobLogs(owner, repo, job.id(), 1500)).append('\n');
+          }
+        } catch (RestClientException exception) {
+          output.append("Logs unavailable. They may have expired or access may be restricted.\n");
+        }
+        if (output.length() > 10_000) {
+          break;
+        }
+      }
+      if (failedJobs.size() > 5) {
+        output.append("\nOnly the first five failed jobs are included.");
+      }
+      if (output.length() > 10_000) {
+        return output.substring(0, 9981) + "\n[Output truncated]";
+      }
+      return output.toString();
+    } catch (HttpClientErrorException.NotFound exception) {
+      return "I couldn't find run " + runId + " on " + owner + "/" + repo
+          + ". Check the run ID and repository access.";
+    } catch (RestClientException exception) {
+      return "I couldn't retrieve failed jobs for " + owner + "/" + repo
+          + ". Check GitHub access or try again later.";
+    }
+  }
+
+  /**
+   * Formats elapsed time in whole minutes, hours, or days, using the current clock.
+   * Timestamps less than a minute old or in the future produce {@code just now}.
+   *
+   * @param timestamp time to compare with now, or {@code null}
+   * @return relative time phrase, or an empty string for a missing timestamp
+   */
   private String relativeTime(Instant timestamp) {
     if (timestamp == null) {
       return "";

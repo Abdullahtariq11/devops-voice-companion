@@ -35,3 +35,7 @@ Voice (Alexa+) → MCP tools (Spring Boot) → GitHub Actions API (build status,
 ## Status
 
 In active development. Hackathon deadline: October 23, 2026.
+
+Implemented MCP tools: `get_build_status`, `get_failed_runs`, and `get_failure_logs`.
+See the [implementation summary](docs/implementation.md) for data flow, limits,
+error handling, testing instructions, and remaining work.
