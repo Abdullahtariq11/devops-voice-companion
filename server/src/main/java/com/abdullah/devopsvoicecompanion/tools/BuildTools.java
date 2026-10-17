@@ -8,6 +8,9 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
+import java.time.Duration;
+import java.time.Instant;
+
 @Component
 public class BuildTools {
   private final GitHubClient gitHubClient;
@@ -16,6 +19,7 @@ public class BuildTools {
     this.gitHubClient = gitHubClient;
   }
 
+  /** */
   @McpTool(
       name = "get_build_status",
       description = "Get the latest GitHub Actions build status for a repository")
@@ -29,20 +33,30 @@ public class BuildTools {
               run -> {
                 String result;
                 if ("completed".equals(run.status())) {
-                  result = switch (run.conclusion() == null ? "" : run.conclusion()) {
-                    case "success" -> "passed";
-                    case "failure" -> "failed";
-                    case "cancelled" -> "was cancelled";
-                    case "timed_out" -> "timed out";
-                    default -> "finished without a pass or fail result";
-                  };
+                  result =
+                      switch (run.conclusion() == null ? "" : run.conclusion()) {
+                        case "success" -> "passed";
+                        case "failure" -> "failed";
+                        case "cancelled" -> "was cancelled";
+                        case "timed_out" -> "timed out";
+                        default -> "finished without a pass or fail result";
+                      };
                 } else {
-                  result = switch (run.status() == null ? "" : run.status()) {
-                    case "in_progress" -> "is running";
-                    case "queued" -> "is queued";
-                    case "waiting", "pending", "requested" -> "is waiting to start";
-                    default -> "has not finished yet";
-                  };
+                  result =
+                      switch (run.status() == null ? "" : run.status()) {
+                        case "in_progress" -> "is running";
+                        case "queued" -> "is queued";
+                        case "waiting", "pending", "requested" -> "is waiting to start";
+                        default -> "has not finished yet";
+                      };
+                }
+
+                boolean completed = "completed".equals(run.status());
+                String time = relativeTime(completed ? run.updatedAt() : run.createdAt());
+
+                String timing = "";
+                if (!time.isEmpty()) {
+                  timing = completed ? " " + time : "; created " + time;
                 }
 
                 return "The latest build on "
@@ -51,6 +65,7 @@ public class BuildTools {
                     + repo
                     + " "
                     + result
+                    + timing
                     + " on branch "
                     + run.headBranch()
                     + ".";
@@ -89,5 +104,30 @@ public class BuildTools {
           + repo
           + ". Please try again shortly.";
     }
+  }
+
+  /** */
+  private String relativeTime(Instant timestamp) {
+    if (timestamp == null) {
+      return "";
+    }
+    long seconds = Math.max(0, Duration.between(timestamp, Instant.now()).getSeconds());
+
+    if (seconds < 60) {
+      return "just now";
+    }
+
+    long minutes = seconds / 60;
+    if (minutes < 60) {
+      return minutes + (minutes == 1 ? " minute ago" : " minutes ago");
+    }
+
+    long hours = minutes / 60;
+    if (hours < 24) {
+      return hours + (hours == 1 ? " hour ago" : " hours ago");
+    }
+
+    long days = hours / 24;
+    return days + (days == 1 ? " day ago" : " days ago");
   }
 }
