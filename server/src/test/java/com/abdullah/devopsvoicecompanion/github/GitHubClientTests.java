@@ -1,8 +1,10 @@
 package com.abdullah.devopsvoicecompanion.github;
 
+import com.abdullah.devopsvoicecompanion.bedrock.BedrockSummarizer;
 import com.abdullah.devopsvoicecompanion.tools.BuildTools;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockMakers;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -11,6 +13,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.withSettings;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
@@ -98,7 +102,9 @@ class GitHubClientTests {
     api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/jobs/123/logs"))
         .andRespond(withResourceNotFound());
 
-    String result = new BuildTools(client).getFailureLogs("owner", "repo", 42);
+    String result = new BuildTools(client,
+        mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS)))
+        .getFailureLogs("owner", "repo", 42);
 
     assertTrue(result.contains("Job: Tests (failure)"));
     assertTrue(result.contains("Failed step: Run tests"));
@@ -118,7 +124,9 @@ class GitHubClientTests {
     api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/jobs/123/logs"))
         .andRespond(withResourceNotFound());
 
-    String result = new BuildTools(client).getFailureLogs("owner", "repo", 42);
+    String result = new BuildTools(client,
+        mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS)))
+        .getFailureLogs("owner", "repo", 42);
 
     assertTrue(result.length() <= 10_000);
     assertTrue(result.endsWith("[Output truncated]"));

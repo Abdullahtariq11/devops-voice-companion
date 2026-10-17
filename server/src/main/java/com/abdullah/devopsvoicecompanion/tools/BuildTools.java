@@ -1,5 +1,6 @@
 package com.abdullah.devopsvoicecompanion.tools;
 
+import com.abdullah.devopsvoicecompanion.bedrock.BedrockSummarizer;
 import com.abdullah.devopsvoicecompanion.github.GitHubClient;
 import com.abdullah.devopsvoicecompanion.github.GitHubJob;
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -21,14 +22,16 @@ import java.util.stream.Collectors;
 @Component
 public class BuildTools {
   private final GitHubClient gitHubClient;
+  private final BedrockSummarizer bedrockSummarizer;
 
   /**
    * Creates tools backed by the GitHub API client.
    *
    * @param gitHubClient client supplied by Spring
    */
-  public BuildTools(GitHubClient gitHubClient) {
+  public BuildTools(GitHubClient gitHubClient, BedrockSummarizer bedrockSummarizer) {
     this.gitHubClient = gitHubClient;
+    this.bedrockSummarizer = bedrockSummarizer;
   }
 
   /**
