@@ -8,7 +8,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
-import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
@@ -67,10 +66,12 @@ public class GitHubClient {
   }
 
   /**
-   * Downloads the beginning of a job's UTF-8 log using GitHub's temporary HTTPS redirect.
+   * Downloads the end of a job's UTF-8 log using GitHub's temporary HTTPS redirect.
    * Uses a separate client so the API token is not forwarded to the download host.
-   * Reads at most {@code maxChars + 1} decoded characters and includes a truncation marker
-   * within the requested limit when more text is available.
+   * Uses the log's content length to request its final 64 KiB with an HTTP byte range.
+   * Reads at most 64 KiB plus one overflow byte and rejects oversized or incomplete
+   * responses rather than presenting the start of a log as its end. A prefix marker
+   * counts toward the character limit when earlier log content is omitted.
    *
    * @param owner GitHub account or organization
    * @param repo repository name without the owner
@@ -96,26 +97,47 @@ public class GitHubClient {
       throw new RestClientException("GitHub did not provide a valid log download URL.");
     }
 
-    return logDownloadClient.get().uri(location).exchange((request, download) -> {
-      if (!download.getStatusCode().is2xxSuccessful()) {
+    long contentLength = logDownloadClient.head().uri(location)
+        .header("Accept-Encoding", "identity")
+        .retrieve().toBodilessEntity().getHeaders().getContentLength();
+    int byteLimit = 64 * 1024;
+    long start = contentLength > byteLimit ? contentLength - byteLimit : 0;
+    var downloadRequest = logDownloadClient.get().uri(location)
+        .header("Accept-Encoding", "identity");
+    if (start > 0) {
+      downloadRequest.header("Range", "bytes=" + start + "-" + (contentLength - 1));
+    }
+
+    return downloadRequest.exchange((request, download) -> {
+      int status = download.getStatusCode().value();
+      if (status != 200 && status != 206) {
         throw new RestClientException("Job logs are unavailable.");
       }
-      try (var reader = new InputStreamReader(download.getBody(), StandardCharsets.UTF_8)) {
-        char[] excerpt = new char[maxChars + 1];
-        int count = 0;
-        int read;
-        while (count < excerpt.length
-            && (read = reader.read(excerpt, count, excerpt.length - count)) != -1) {
-          count += read;
-        }
-        String text = new String(excerpt, 0, Math.min(count, maxChars));
-        if (count > maxChars) {
-          String marker = "\n[Log truncated]";
-          return text.substring(0, Math.max(0, maxChars - marker.length()))
-              + marker.substring(0, Math.min(marker.length(), maxChars));
-        }
+      if (status == 206 && (start == 0 || !("bytes " + start + "-" + (contentLength - 1)
+          + "/" + contentLength).equals(download.getHeaders().getFirst("Content-Range")))) {
+        throw new RestClientException("Log download returned an unexpected byte range.");
+      }
+      byte[] bytes = download.getBody().readNBytes(byteLimit + 1);
+      if (bytes.length > byteLimit) {
+        throw new RestClientException("Log download exceeds the bounded download limit.");
+      }
+      long expectedLength = status == 206 ? contentLength - start : contentLength;
+      if (expectedLength >= 0 && bytes.length != expectedLength) {
+        throw new RestClientException("Log download is incomplete.");
+      }
+
+      String text = new String(bytes, StandardCharsets.UTF_8);
+      if (start == 0 && text.length() <= maxChars) {
         return text;
       }
+      String marker = "[Earlier log content omitted]\n";
+      String prefix = marker.substring(0, Math.min(marker.length(), maxChars));
+      int tailLength = maxChars - prefix.length();
+      int tailStart = Math.max(0, text.length() - tailLength);
+      if (tailStart < text.length() && Character.isLowSurrogate(text.charAt(tailStart))) {
+        tailStart++;
+      }
+      return prefix + text.substring(tailStart);
     });
   }
 

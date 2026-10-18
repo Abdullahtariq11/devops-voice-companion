@@ -10,6 +10,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 import software.amazon.awssdk.core.exception.SdkException;
 
 import java.time.Duration;
@@ -182,7 +183,7 @@ public class BuildTools {
 
   /**
    * Collects failed or timed-out jobs and steps from the run's latest attempt. Includes up to five
-   * jobs and the first 1500 log characters per job, with total output capped at 10000 characters.
+   * jobs and the final 1500 log characters per job, with total output capped at 10000 characters.
    * Job metadata is retained when a log download fails. Excerpts may omit errors that occur later
    * in a long log and are not a spoken summary.
    *
@@ -290,6 +291,10 @@ public class BuildTools {
                 .append(gitHubClient.getJobLogs(owner, repo, job.id(), 1500))
                 .append('\n');
           }
+        } catch (RestClientResponseException exception) {
+          output.append("Logs unavailable: GitHub returned HTTP ")
+              .append(exception.getStatusCode().value())
+              .append(".\n");
         } catch (RestClientException exception) {
           output.append("Logs unavailable. They may have expired or access may be restricted.\n");
         }

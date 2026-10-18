@@ -31,8 +31,13 @@ three-second connection timeout and a five-second read timeout per request.
 
 - Completed build timing uses `updatedAt` as an approximation of completion time.
   Active build timing uses `createdAt` and explicitly says when the run was created.
-- Failure details include up to five jobs, with the first 1500 decoded log characters
-  per job. These excerpts can miss failures later in long logs.
+- Failure details include up to five jobs, with the final 1500 decoded log characters
+  per job, including a marker when earlier content is omitted. Errors earlier in a long
+  log may still be outside the excerpt.
+- The downloader checks log size with HEAD, requests the final 64 KiB for larger logs,
+  and reads at most 64 KiB plus one overflow byte. Incomplete or oversized responses
+  are rejected. Large logs require a host that supplies a content length and honors
+  byte ranges; otherwise job and step metadata remain available without log text.
 - Log truncation markers count toward the excerpt limit. Combined failure output,
   including job metadata, is capped at 10000 characters.
 - If a job log is unavailable, the tool retains its job and failed-step metadata.
@@ -88,4 +93,4 @@ GitHub log downloads or the full MCP-to-Bedrock flow.
 
 - End-to-end verification of `summarize_failure` through MCP with live GitHub evidence.
 - Alexa+ integration and end-to-end voice testing.
-- More targeted excerpts so errors later in long logs are available for summarization.
+- More targeted excerpts for failures outside the final log segment.

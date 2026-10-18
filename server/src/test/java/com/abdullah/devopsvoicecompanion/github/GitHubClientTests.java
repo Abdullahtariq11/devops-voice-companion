@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockMakers;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.HttpClientErrorException;
@@ -36,7 +37,10 @@ class GitHubClientTests {
   @Test
   void downloadsLogsWithoutForwardingCredentials() {
     expectRedirect("https://logs.example.com/job.txt?signature=test");
+    expectLogSize("https://logs.example.com/job.txt?signature=test",
+        "Test failed: expected 2 but got 1".length());
     downloads.expect(requestTo("https://logs.example.com/job.txt?signature=test"))
+        .andExpect(method(HttpMethod.GET))
         .andExpect(headerDoesNotExist("Authorization"))
         .andRespond(withSuccess("Test failed: expected 2 but got 1", MediaType.TEXT_PLAIN));
 
@@ -48,14 +52,17 @@ class GitHubClientTests {
 
   @Test
   void truncatesOversizedLogsAndMarksExcerpt() {
+    String failure = "PaymentServiceTest failed: 100/90";
     expectRedirect("https://logs.example.com/job.txt");
+    expectLogSize("https://logs.example.com/job.txt", 20_000);
     downloads.expect(requestTo("https://logs.example.com/job.txt"))
-        .andRespond(withSuccess("x".repeat(20_000), MediaType.TEXT_PLAIN));
+        .andRespond(withSuccess("x".repeat(20_000 - failure.length()) + failure, MediaType.TEXT_PLAIN));
 
     String result = client.getJobLogs("owner", "repo", 123, 100);
 
     assertEquals(100, result.length());
-    assertTrue(result.endsWith("[Log truncated]"));
+    assertTrue(result.startsWith("[Earlier log content omitted]"));
+    assertTrue(result.endsWith(failure));
     api.verify();
     downloads.verify();
   }
@@ -87,6 +94,64 @@ class GitHubClientTests {
         .andRespond(withStatus(HttpStatus.FOUND).header("Location", location));
   }
 
+  private void expectLogSize(String location, int length) {
+    downloads.expect(requestTo(location))
+        .andExpect(method(HttpMethod.HEAD))
+        .andExpect(headerDoesNotExist("Authorization"))
+        .andRespond(withStatus(HttpStatus.OK).header("Content-Length", Integer.toString(length)));
+  }
+
+  @Test
+  void downloadsOnlyFinalByteRangeForLargeLogs() {
+    expectRedirect("https://logs.example.com/job.txt");
+    int totalBytes = 2_000_000;
+    int tailBytes = 64 * 1024;
+    String failure = "Expected payment total: 100. Actual payment total: 90.";
+    expectLogSize("https://logs.example.com/job.txt", totalBytes);
+    downloads.expect(requestTo("https://logs.example.com/job.txt"))
+        .andExpect(header("Range", "bytes=" + (totalBytes - tailBytes) + "-" + (totalBytes - 1)))
+        .andExpect(headerDoesNotExist("Authorization"))
+        .andRespond(withStatus(HttpStatus.PARTIAL_CONTENT)
+            .header("Content-Range", "bytes " + (totalBytes - tailBytes) + "-"
+                + (totalBytes - 1) + "/" + totalBytes)
+            .body("x".repeat(tailBytes - failure.length()) + failure));
+
+    String result = client.getJobLogs("owner", "repo", 123, 1500);
+
+    assertEquals(1500, result.length());
+    assertTrue(result.endsWith(failure));
+    api.verify();
+    downloads.verify();
+  }
+
+  @Test
+  void rejectsOversizedResponseWhenHostIgnoresRange() {
+    expectRedirect("https://logs.example.com/job.txt");
+    expectLogSize("https://logs.example.com/job.txt", 100_000);
+    downloads.expect(requestTo("https://logs.example.com/job.txt"))
+        .andRespond(withSuccess("x".repeat(100_000), MediaType.TEXT_PLAIN));
+
+    assertThrows(RestClientException.class,
+        () -> client.getJobLogs("owner", "repo", 123, 1500));
+    api.verify();
+    downloads.verify();
+  }
+
+  @Test
+  void rejectsPartialResponseThatDoesNotReachTheLogEnd() {
+    expectRedirect("https://logs.example.com/job.txt");
+    expectLogSize("https://logs.example.com/job.txt", 100_000);
+    downloads.expect(requestTo("https://logs.example.com/job.txt"))
+        .andRespond(withStatus(HttpStatus.PARTIAL_CONTENT)
+            .header("Content-Range", "bytes 0-65535/100000")
+            .body("x".repeat(65536)));
+
+    assertThrows(RestClientException.class,
+        () -> client.getJobLogs("owner", "repo", 123, 1500));
+    api.verify();
+    downloads.verify();
+  }
+
   @Test
   void failureToolKeepsJobDetailsWhenLogsHaveExpired() {
     api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs/42/jobs"
@@ -108,7 +173,7 @@ class GitHubClientTests {
 
     assertTrue(result.contains("Job: Tests (failure)"));
     assertTrue(result.contains("Failed step: Run tests"));
-    assertTrue(result.contains("Logs unavailable"));
+    assertTrue(result.contains("Logs unavailable: GitHub returned HTTP 404."));
     assertFalse(result.contains("Successful job"));
     api.verify();
     downloads.verify();
