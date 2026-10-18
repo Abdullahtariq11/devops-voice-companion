@@ -145,7 +145,7 @@ public class BuildTools {
   public String getFailedRuns(
       @McpToolParam(description = "GitHub owner or organization", required = true) String owner,
       @McpToolParam(description = "Repository name", required = true) String repo,
-      @McpToolParam(description = "Number of failed builds, from 1 to 5. Defaults to 5")
+      @McpToolParam(description = "Number of failed builds, from 1 to 5. Defaults to 5", required = false)
           Integer limit) {
     int requestedLimit = limit == null ? 5 : limit;
     if (requestedLimit < 1 || requestedLimit > 5) {

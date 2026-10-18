@@ -4,6 +4,9 @@ import com.abdullah.devopsvoicecompanion.bedrock.BedrockSummarizer;
 import com.abdullah.devopsvoicecompanion.tools.BuildTools;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockMakers;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpMethod;
@@ -12,6 +15,9 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
@@ -32,6 +38,138 @@ class GitHubClientTests {
     var downloadBuilder = RestClient.builder();
     downloads = MockRestServiceServer.bindTo(downloadBuilder).build();
     client = new GitHubClient(apiBuilder.build(), downloadBuilder.build());
+  }
+
+  @Test
+  void mapsLatestRunFromGithubJson() {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs?per_page=1"))
+        .andRespond(withSuccess("""
+            {"total_count":1,"workflow_runs":[{
+              "id":42,"status":"completed","conclusion":"failure","head_branch":"feature/test",
+              "created_at":"2026-10-01T12:00:00Z","updated_at":"2026-10-01T12:05:00Z",
+              "display_title":"Test payments","html_url":"https://github.com/owner/repo/actions/runs/42"
+            }]}
+            """, MediaType.APPLICATION_JSON));
+
+    GitHubRun run = client.getLatestRun("owner", "repo").orElseThrow();
+
+    assertEquals(42L, run.id());
+    assertEquals("completed", run.status());
+    assertEquals("failure", run.conclusion());
+    assertEquals("feature/test", run.headBranch());
+    assertEquals(Instant.parse("2026-10-01T12:00:00Z"), run.createdAt());
+    assertEquals(Instant.parse("2026-10-01T12:05:00Z"), run.updatedAt());
+    assertEquals("Test payments", run.displayTitle());
+    api.verify();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "{\"total_count\":0,\"workflow_runs\":[]}"})
+  void handlesEmptyLatestRunResponses(String body) {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs?per_page=1"))
+        .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+    assertTrue(client.getLatestRun("owner", "repo").isEmpty());
+    api.verify();
+  }
+
+  @Test
+  void requestsFailureFilterAndMapsRunsInResponseOrder() {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs?status=failure&per_page=2"))
+        .andRespond(withSuccess("""
+            {"total_count":2,"workflow_runs":[
+              {"id":43,"status":"completed","conclusion":"failure","head_branch":"main"},
+              {"id":42,"status":"completed","conclusion":"failure","head_branch":"dev"}
+            ]}
+            """, MediaType.APPLICATION_JSON));
+
+    var runs = client.getFailedRuns("owner", "repo", 2);
+
+    assertEquals(java.util.List.of(43L, 42L), runs.stream().map(GitHubRun::id).toList());
+    assertEquals("dev", runs.get(1).headBranch());
+    api.verify();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "{\"total_count\":0,\"workflow_runs\":[]}", "{\"total_count\":0}"})
+  void handlesEmptyFailedRunResponses(String body) {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs?status=failure&per_page=5"))
+        .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+    assertTrue(client.getFailedRuns("owner", "repo", 5).isEmpty());
+    api.verify();
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {-1, 0, 101})
+  void rejectsInvalidFailureLimitsWithoutMakingRequests(int limit) {
+    assertThrows(IllegalArgumentException.class, () -> client.getFailedRuns("owner", "repo", limit));
+    api.verify();
+  }
+
+  @Test
+  void fetchesAllJobPagesAndMapsSteps() {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs/42/jobs"
+            + "?filter=latest&per_page=100&page=1"))
+        .andRespond(withSuccess("""
+            {"total_count":2,"jobs":[{"id":123,"name":"Tests","status":"completed",
+              "conclusion":"failure","steps":[
+                {"name":"Run tests","status":"completed","conclusion":"failure","number":2}
+              ]}]}
+            """, MediaType.APPLICATION_JSON));
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs/42/jobs"
+            + "?filter=latest&per_page=100&page=2"))
+        .andRespond(withSuccess("""
+            {"total_count":2,"jobs":[{"id":124,"name":"Lint","conclusion":"success","steps":[]}]}
+            """, MediaType.APPLICATION_JSON));
+
+    var jobs = client.getJobs("owner", "repo", 42);
+
+    assertEquals(java.util.List.of(123L, 124L), jobs.stream().map(GitHubJob::id).toList());
+    assertEquals("Run tests", jobs.getFirst().steps().getFirst().name());
+    assertEquals(2, jobs.getFirst().steps().getFirst().number());
+    assertEquals("failure", jobs.getFirst().steps().getFirst().conclusion());
+    assertThrows(UnsupportedOperationException.class, () -> jobs.clear());
+    api.verify();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "{\"total_count\":0}", "{\"total_count\":0,\"jobs\":[]}"})
+  void stopsOnEmptyJobPages(String body) {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs/42/jobs"
+            + "?filter=latest&per_page=100&page=1"))
+        .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+    assertTrue(client.getJobs("owner", "repo", 42).isEmpty());
+    api.verify();
+  }
+
+  @Test
+  void rejectsInvalidRunIdWithoutMakingRequests() {
+    assertThrows(IllegalArgumentException.class, () -> client.getJobs("owner", "repo", 0));
+    api.verify();
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {401, 403, 404, 429, 500})
+  void propagatesApiFailuresToToolLayer(int status) {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs?per_page=1"))
+        .andRespond(withStatus(HttpStatus.valueOf(status)));
+
+    var failure = assertThrows(RestClientResponseException.class,
+        () -> client.getLatestRun("owner", "repo"));
+
+    assertEquals(status, failure.getStatusCode().value());
+    api.verify();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0,100", "-1,100", "123,0", "123,10001"})
+  void rejectsInvalidLogArgumentsWithoutMakingRequests(long jobId, int limit) {
+    assertThrows(IllegalArgumentException.class,
+        () -> client.getJobLogs("owner", "repo", jobId, limit));
+    api.verify();
+    downloads.verify();
   }
 
   @Test

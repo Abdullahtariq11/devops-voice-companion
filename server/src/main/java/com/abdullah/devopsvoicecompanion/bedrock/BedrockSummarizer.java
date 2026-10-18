@@ -1,6 +1,7 @@
 package com.abdullah.devopsvoicecompanion.bedrock;
 
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
 import software.amazon.awssdk.services.bedrockruntime.model.ContentBlock;
 import software.amazon.awssdk.services.bedrockruntime.model.ConversationRole;
@@ -14,8 +15,18 @@ import java.util.stream.Collectors;
 public class BedrockSummarizer {
   private final BedrockRuntimeClient client;
 
+  @Autowired
   public BedrockSummarizer() {
     this.client = BedrockRuntimeClient.create();
+  }
+
+  /**
+   * Supplies an isolated SDK client for tests without loading local AWS configuration.
+   *
+   * @param client Bedrock Runtime client
+   */
+  BedrockSummarizer(BedrockRuntimeClient client) {
+    this.client = client;
   }
 
   /**

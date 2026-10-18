@@ -4,13 +4,23 @@ import com.abdullah.devopsvoicecompanion.bedrock.BedrockSummarizer;
 import com.abdullah.devopsvoicecompanion.github.GitHubClient;
 import com.abdullah.devopsvoicecompanion.github.GitHubJob;
 import com.abdullah.devopsvoicecompanion.github.GitHubStep;
+import com.abdullah.devopsvoicecompanion.github.GitHubRun;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.mockito.MockMakers;
 import org.springframework.web.client.RestClientException;
 import software.amazon.awssdk.core.exception.SdkClientException;
 
 import java.util.List;
+import java.util.Optional;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -27,6 +37,112 @@ class BuildToolsTests {
     github = mock(GitHubClient.class, withSettings().mockMaker(MockMakers.SUBCLASS));
     summarizer = mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS));
     tools = new BuildTools(github, summarizer);
+  }
+
+  @ParameterizedTest
+  @CsvSource(value = {
+      "completed,success,passed", "completed,failure,failed", "completed,cancelled,was cancelled",
+      "completed,timed_out,timed out", "completed,NULL,finished without a pass or fail result",
+      "completed,neutral,finished without a pass or fail result", "in_progress,NULL,is running",
+      "queued,NULL,is queued", "waiting,NULL,is waiting to start", "pending,NULL,is waiting to start",
+      "requested,NULL,is waiting to start", "unknown,NULL,has not finished yet",
+      "NULL,NULL,has not finished yet"
+  }, nullValues = "NULL")
+  void formatsBuildStatesAsSpokenText(String status, String conclusion, String phrase) {
+    when(github.getLatestRun("owner", "repo")).thenReturn(Optional.of(
+        new GitHubRun(42L, status, conclusion, "main", null, null, "Build")));
+
+    assertEquals("The latest build on owner/repo " + phrase + " on branch main.",
+        tools.getBuildStatus("owner", "repo"));
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "-3600,just now", "20,just now", "90,1 minute ago", "150,2 minutes ago",
+      "5400,1 hour ago", "9000,2 hours ago", "129600,1 day ago", "216000,2 days ago"
+  })
+  void formatsRelativeTimeWithoutLeakingAbsoluteTimestamps(long ageSeconds, String phrase) {
+    Instant updated = Instant.now().minusSeconds(ageSeconds);
+    when(github.getLatestRun("owner", "repo")).thenReturn(Optional.of(
+        new GitHubRun(42L, "completed", "success", "main", Instant.EPOCH, updated, "Build")));
+
+    assertEquals("The latest build on owner/repo passed " + phrase + " on branch main.",
+        tools.getBuildStatus("owner", "repo"));
+  }
+
+  @Test
+  void activeBuildUsesCreationTimeInsteadOfUpdateTime() {
+    when(github.getLatestRun("owner", "repo")).thenReturn(Optional.of(
+        new GitHubRun(42L, "in_progress", null, "main", Instant.now().minusSeconds(150),
+            Instant.now(), "Build")));
+
+    assertEquals("The latest build on owner/repo is running; created 2 minutes ago on branch main.",
+        tools.getBuildStatus("owner", "repo"));
+  }
+
+  @Test
+  void reportsRepositoryWithNoRuns() {
+    when(github.getLatestRun("owner", "repo")).thenReturn(Optional.empty());
+
+    assertEquals("No builds found for owner/repo.", tools.getBuildStatus("owner", "repo"));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"401,authentication failed", "403,denied access", "404,couldn't find",
+      "429,rate limit", "500,temporarily unavailable"})
+  void convertsGithubHttpErrorsToFriendlyMessages(int status, String phrase) {
+    RuntimeException failure = status >= 500
+        ? HttpServerErrorException.create(HttpStatus.valueOf(status), "diagnostic", null, null, null)
+        : HttpClientErrorException.create(HttpStatus.valueOf(status), "diagnostic", null, null, null);
+    when(github.getLatestRun("owner", "repo")).thenThrow(failure);
+
+    String result = tools.getBuildStatus("owner", "repo");
+
+    assertTrue(result.contains("owner/repo"));
+    assertTrue(result.contains(phrase));
+    assertFalse(result.contains("diagnostic"));
+  }
+
+  @Test
+  void convertsConnectionFailureToFriendlyMessage() {
+    when(github.getLatestRun("owner", "repo")).thenThrow(new ResourceAccessException("diagnostic"));
+
+    assertEquals("I couldn't reach GitHub to check owner/repo. Please try again shortly.",
+        tools.getBuildStatus("owner", "repo"));
+  }
+
+  @Test
+  void defaultsFailedRunLimitToFive() {
+    when(github.getFailedRuns("owner", "repo", 5)).thenReturn(List.of());
+
+    assertEquals("No failed builds found for owner/repo.", tools.getFailedRuns("owner", "repo", null));
+    verify(github).getFailedRuns("owner", "repo", 5);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {-1, 0, 6})
+  void rejectsInvalidToolLimitsWithoutCallingGithub(int limit) {
+    assertEquals("Please request between 1 and 5 failed builds.",
+        tools.getFailedRuns("owner", "repo", limit));
+    verifyNoInteractions(github, summarizer);
+  }
+
+  @Test
+  void listsFailedRunIdsBranchesAndRelativeTimes() {
+    when(github.getFailedRuns("owner", "repo", 1)).thenReturn(List.of(
+        new GitHubRun(42L, "completed", "failure", "dev", null,
+            Instant.now().minusSeconds(150), "Build")));
+
+    assertEquals("Recent failed builds on owner/repo: Run 42: branch dev, 2 minutes ago.",
+        tools.getFailedRuns("owner", "repo", 1));
+  }
+
+  @Test
+  void failedRunListingHandlesGithubErrors() {
+    when(github.getFailedRuns("owner", "repo", 5)).thenThrow(new RestClientException("diagnostic"));
+
+    assertEquals("I couldn't retrieve failed builds for owner/repo. Please try again later.",
+        tools.getFailedRuns("owner", "repo", 5));
   }
 
   @Test
