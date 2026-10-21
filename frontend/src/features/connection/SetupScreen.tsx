@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import Logo from '../../components/Logo'
 
 function SetupScreen() {
+    const [serverUrl, setServerUrl] = useState('');
+
     return (
         <main className='flex min-h-svh items-center justify-center p-6'>
             <section aria-labelledby="setup-title"
@@ -29,43 +32,48 @@ function SetupScreen() {
                     Talk to your CI/CD. Ask about builds, failures, and what broke.
                 </p>
 
-            <form className='mt-8 space-y-5'>
-                <div className="space-y-2">
-                    <label htmlFor="server-url" className="block text-sm font-medium">
-                        Server URL
-                    </label>
-                    <input
-                        id="server-url"
-                        name="serverUrl"
-                        type="url"
-                        required
-                        placeholder="https://your-mcp-server.railway.app/mcp"
-                        className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                    />
-                </div>
-                <div className="space-y-2">
-                    <label htmlFor="auth-token" className="block text-sm font-medium">
-                        Auth token
-                        <span className="ml-2 font-normal text-muted">Optional</span>
-                    </label>
-                    <input
-                        id="auth-token"
-                        name="authToken"
-                        type="password"
-                        autoComplete="off"
-                        placeholder="Bearer token"
-                        className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                    />
-                </div>
-
-                <button
-                    type="submit"
-                    disabled
-                    className="w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
+                <form
+                    className='mt-8 space-y-5'
+                    onSubmit={(event) => event.preventDefault()}
                 >
-                    Connect to server
-                </button>
-            </form>
+                    <div className="space-y-2">
+                        <label htmlFor="server-url" className="block text-sm font-medium">
+                            Server URL
+                        </label>
+                        <input
+                            id="server-url"
+                            name="serverUrl"
+                            type="url"
+                            value={serverUrl}
+                            onChange={(event) => setServerUrl(event.target.value)}
+                            required
+                            placeholder="https://your-mcp-server.railway.app/mcp"
+                            className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label htmlFor="auth-token" className="block text-sm font-medium">
+                            Auth token
+                            <span className="ml-2 font-normal text-muted">Optional</span>
+                        </label>
+                        <input
+                            id="auth-token"
+                            name="authToken"
+                            type="password"
+                            autoComplete="off"
+                            placeholder="Bearer token"
+                            className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={!serverUrl.trim()}
+                        className="w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        Connect to server
+                    </button>
+                </form>
             </section>
         </main>
     )
