@@ -3,6 +3,21 @@ import Logo from '../../components/Logo'
 
 function SetupScreen() {
     const [serverUrl, setServerUrl] = useState('');
+    const [error, setError] = useState('');
+
+    function validateServerUrl() {
+        try {
+            const url = new URL(serverUrl.trim())
+
+            if (url.protocol !== 'https:' || url.username || url.password) {
+                throw new Error('Invalid server URL')
+            }
+
+            setError('')
+        } catch {
+            setError("Couldn't reach that server — check the URL and try again")
+        }
+    }
 
     return (
         <main className='flex min-h-svh items-center justify-center p-6'>
@@ -34,7 +49,11 @@ function SetupScreen() {
 
                 <form
                     className='mt-8 space-y-5'
-                    onSubmit={(event) => event.preventDefault()}
+                    noValidate
+                    onSubmit={(event) => {
+                        event.preventDefault()
+                        validateServerUrl()
+                    }}
                 >
                     <div className="space-y-2">
                         <label htmlFor="server-url" className="block text-sm font-medium">
@@ -46,10 +65,17 @@ function SetupScreen() {
                             type="url"
                             value={serverUrl}
                             onChange={(event) => setServerUrl(event.target.value)}
+                            aria-invalid={Boolean(error)}
+                            aria-describedby={error ? 'connection-error' : undefined}
                             required
                             placeholder="https://your-mcp-server.railway.app/mcp"
                             className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                         />
+                        {error && (
+                            <p id="connection-error" role="alert" className="text-sm text-failure">
+                                {error}
+                            </p>
+                        )}
                     </div>
                     <div className="space-y-2">
                         <label htmlFor="auth-token" className="block text-sm font-medium">
