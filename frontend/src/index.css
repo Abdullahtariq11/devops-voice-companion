@@ -1,26 +1,21 @@
-:root {
-  font-family: Inter, system-ui, sans-serif;
-  color: #f4f4f5;
-  background: #0a0a0b;
-  color-scheme: dark;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: Inter, system-ui, sans-serif;
+  --color-page: #0a0a0b;
+  --color-surface: #131316;
+  --color-primary: #22c55e;
+  --color-thinking: #f59e0b;
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+@layer base {
+  :root {
+    color-scheme: dark;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
 
-body {
-  margin: 0;
-}
-
-button,
-input,
-textarea,
-select {
-  font: inherit;
+  body {
+    @apply bg-page font-sans text-zinc-100 antialiased;
+  }
 }
