@@ -2,10 +2,24 @@
 
 @theme {
   --font-sans: Inter, system-ui, sans-serif;
-  --color-page: #0a0a0b;
-  --color-surface: #131316;
-  --color-primary: #22c55e;
+  --color-page: #08090b;
+  --color-surface: #111419;
+  --color-surface-hover: #171b21;
+  --color-raised: #1a1f26;
+  --color-inset: #0b0d10;
+
+  --color-foreground: #f2f5f7;
+  --color-muted: #929ba8;
+  --color-subtle: #5f6977;
+  --color-steel: #8191a4;
+
+  --color-primary: #28d66f;
+  --color-primary-light: #76e9a6;
   --color-thinking: #f59e0b;
+  --color-failure: #f87171;
+
+  --color-border: rgb(184 202 220 / 9%);
+  --color-border-strong: rgb(194 211 227 / 16%);
 }
 
 @layer base {
@@ -16,6 +30,6 @@
   }
 
   body {
-    @apply bg-page font-sans text-zinc-100 antialiased;
+    @apply bg-page font-sans text-foreground antialiased;
   }
 }
