@@ -1,3 +1,5 @@
+import Logo from '../../components/Logo'
+
 function SetupScreen() {
     return (
         <main className='flex min-h-svh items-center justify-center p-6'>
@@ -9,8 +11,11 @@ function SetupScreen() {
                     className='absolute inset-x-16 top-0 h-px bg-primary'
                 />
                     <p className='font-mono text-xs tracking-widest text-primary'>MCP VOICE CLIENT</p>
-                    <p className="mt-6 text-sm font-medium">
-                        DevOps Voice Companion
+                    <div className="mt-6">
+                        <Logo />
+                    </div>
+                    <p className="mt-5 text-xl font-semibold tracking-tight text-foreground">
+                        Fail<span className="text-primary">Whisperer</span>
                     </p>
 
                     <h1
