@@ -1,7 +1,7 @@
-import './App.css'
+import SetupScreen from "./features/connection/SetupScreen"
 
 function App() {
-  return <main className="app" />
+  return <SetupScreen/>
 }
 
 export default App

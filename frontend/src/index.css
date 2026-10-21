@@ -1,26 +1,35 @@
-:root {
-  font-family: Inter, system-ui, sans-serif;
-  color: #f4f4f5;
-  background: #0a0a0b;
-  color-scheme: dark;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: Inter, system-ui, sans-serif;
+  --color-page: #08090b;
+  --color-surface: #111419;
+  --color-surface-hover: #171b21;
+  --color-raised: #1a1f26;
+  --color-inset: #0b0d10;
+
+  --color-foreground: #f2f5f7;
+  --color-muted: #929ba8;
+  --color-subtle: #5f6977;
+  --color-steel: #8191a4;
+
+  --color-primary: #28d66f;
+  --color-primary-light: #76e9a6;
+  --color-thinking: #f59e0b;
+  --color-failure: #f87171;
+
+  --color-border: rgb(184 202 220 / 9%);
+  --color-border-strong: rgb(194 211 227 / 16%);
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+@layer base {
+  :root {
+    color-scheme: dark;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
 
-body {
-  margin: 0;
-}
-
-button,
-input,
-textarea,
-select {
-  font: inherit;
+  body {
+    @apply bg-page font-sans text-foreground antialiased;
+  }
 }
