@@ -3,6 +3,8 @@ import {
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client'
 
+export type McpConnection = Awaited<ReturnType<typeof connectToMcpServer>>
+
 export async function connectToMcpServer(
   serverUrl: string,
   authToken = '',

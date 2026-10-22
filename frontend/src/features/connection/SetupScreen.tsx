@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import Logo from '../../components/Logo'
 import { connectToMcpServer } from '../../lib/mcpClient'
+import type { McpConnection } from '../../lib/mcpClient'
 
-type McpConnection = Awaited<ReturnType<typeof connectToMcpServer>>
+type SetupScreenProps = {
+    connection: McpConnection | null
+    onConnected: (connection: McpConnection) => void
+}
 
-function SetupScreen() {
+function SetupScreen({ connection, onConnected }: SetupScreenProps) {
     const [serverUrl, setServerUrl] = useState('');
     const [authToken, setAuthToken] = useState('')
     const [error, setError] = useState('');
     const [isConnecting, setIsConnecting] = useState(false)
-    const [connection, setConnection] = useState<McpConnection | null>(null)
-    const connectionRef = useRef<McpConnection | null>(null)
     const isMounted = useRef(false)
 
     useEffect(() => {
@@ -18,9 +20,6 @@ function SetupScreen() {
 
         return () => {
             isMounted.current = false
-            if (connectionRef.current) {
-                void connectionRef.current.client.close().catch(() => undefined)
-            }
         }
     }, [])
 
@@ -62,8 +61,7 @@ function SetupScreen() {
                 return
             }
 
-            connectionRef.current = result
-            setConnection(result)
+            onConnected(result)
         } catch {
             if (isMounted.current) {
                 setError("Couldn't connect to that MCP server — check the URL and try again")
@@ -168,6 +166,18 @@ function SetupScreen() {
                             ? 'Discovering tools…'
                             : connection && `${connection.tools.length} tools found and ready to use`}
                     </p>
+                    {connection && (
+                        <ul aria-label="Discovered tools" className="flex flex-wrap gap-2">
+                            {connection.tools.map((tool) => (
+                                <li
+                                    key={tool.name}
+                                    className="max-w-full rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5 font-mono text-xs break-all text-primary-light"
+                                >
+                                    {tool.name}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </form>
             </section>
         </main>
