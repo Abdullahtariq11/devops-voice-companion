@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import Logo from '../../components/Logo'
 import type { McpConnection } from '../../lib/mcpClient'
 
@@ -7,7 +8,75 @@ type VoiceScreenProps = {
 }
 
 export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
+  const [repository, setRepository] = useState('')
+  const [repositoryError, setRepositoryError] = useState('')
+  const [isChecking, setIsChecking] = useState(false)
+  const [requestError, setRequestError] = useState('')
+  const [response, setResponse] = useState<{ text: string; receivedAt: string } | null>(null)
+  const [checkedRepository, setCheckedRepository] = useState('')
+  const requestRef = useRef<AbortController | null>(null)
   const hostname = new URL(connection.serverUrl).host
+  const canCheckBuild = connection.tools.some((tool) => tool.name === 'get_build_status')
+
+  useEffect(() => {
+    return () => requestRef.current?.abort()
+  }, [])
+
+  async function handleCheckBuild() {
+    if (requestRef.current || !canCheckBuild) return
+
+    const repositoryName = repository.trim()
+    const match = /^([a-zA-Z0-9][a-zA-Z0-9-]{0,38})\/([a-zA-Z0-9._-]{1,100})$/.exec(repositoryName)
+
+    if (!match || match[2] === '.' || match[2] === '..') {
+      setRepositoryError('Enter a repository in owner/repository format, not a URL.')
+      return
+    }
+
+    setRepositoryError('')
+    setRequestError('')
+    setResponse(null)
+    setCheckedRepository(repositoryName)
+    setIsChecking(true)
+
+    const controller = new AbortController()
+    requestRef.current = controller
+
+    try {
+      const result = await connection.client.callTool(
+        {
+          name: 'get_build_status',
+          arguments: { owner: match[1], repo: match[2] },
+        },
+        { signal: controller.signal },
+      )
+
+      if (controller.signal.aborted) return
+
+      const text = result.content
+        .filter((content) => content.type === 'text')
+        .map((content) => content.text)
+        .join('\n')
+        .trim()
+
+      if (result.isError || !text) {
+        setRequestError(text || 'The server returned no readable build status. Please try again.')
+      } else {
+        setResponse({ text, receivedAt: new Date().toISOString() })
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setRequestError('Could not retrieve build status. Check your connection and try again.')
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsChecking(false)
+      }
+      if (requestRef.current === controller) {
+        requestRef.current = null
+      }
+    }
+  }
 
   return (
     <div className="flex min-h-svh flex-col lg:h-svh lg:overflow-hidden">
@@ -43,7 +112,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
       </header>
 
       <main className="mx-auto grid w-full max-w-7xl flex-1 gap-6 p-6 lg:min-h-0 lg:grid-cols-[0.85fr_1.15fr] lg:px-10 lg:py-8">
-        <section aria-labelledby="voice-title" className="relative flex min-h-96 flex-col overflow-hidden rounded-2xl border border-border bg-surface/40 p-6 lg:min-h-0">
+        <section aria-labelledby="voice-title" className="relative flex min-h-96 flex-col overflow-y-auto rounded-2xl border border-border bg-surface/40 p-6 lg:min-h-0">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(var(--color-border)_1px,transparent_1px),linear-gradient(90deg,var(--color-border)_1px,transparent_1px)] [background-size:32px_32px]"
@@ -62,8 +131,50 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
             </div>
           </div>
 
-          <div className="relative flex flex-1 flex-col items-center justify-center py-12 text-center">
-            <div className="flex size-40 items-center justify-center rounded-full border border-dashed border-border-strong">
+          <form
+            className="relative mt-6"
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleCheckBuild()
+            }}
+          >
+            <label htmlFor="repository" className="block text-sm font-medium">
+              GitHub repository
+            </label>
+            <input
+              id="repository"
+              type="text"
+              value={repository}
+              disabled={isChecking}
+              onChange={(event) => setRepository(event.target.value)}
+              aria-invalid={Boolean(repositoryError)}
+              aria-describedby={repositoryError ? 'repository-error' : undefined}
+              placeholder="owner/repository"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="mt-2 w-full rounded-xl border border-border bg-inset px-4 py-3 font-mono text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            />
+            {repositoryError && (
+              <p id="repository-error" role="alert" className="mt-2 text-sm text-failure">
+                {repositoryError}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={!repository.trim() || isChecking || !canCheckBuild}
+              className="mt-3 w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light active:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
+            >
+              {isChecking ? 'Checking build status…' : 'Check build status'}
+            </button>
+            {!canCheckBuild && (
+              <p className="mt-2 text-sm text-muted">This server does not offer get_build_status.</p>
+            )}
+          </form>
+
+          <div className="relative flex flex-1 flex-col items-center justify-center py-4 text-center">
+            <div className="flex size-36 shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong">
               <button
                 type="button"
                 disabled
@@ -76,15 +187,15 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
                 </svg>
               </button>
             </div>
-            <h3 className="mt-7 text-lg font-medium">Ready for your first question</h3>
+            <h3 className="mt-5 text-lg font-medium">Check your latest build</h3>
             <p className="mt-2 max-w-64 text-sm leading-relaxed text-muted">
-              Your MCP session is ready. Voice controls are coming next.
+              Enter a repository above to check GitHub Actions. Voice controls are coming next.
             </p>
           </div>
 
-          <div className="relative flex items-center justify-center gap-2 font-mono text-[10px] tracking-wider text-muted">
-            <span aria-hidden="true" className="h-1 w-8 rounded-full bg-primary" />
-            IDLE
+          <div role="status" className="relative flex items-center justify-center gap-2 font-mono text-[10px] tracking-wider text-muted">
+            <span aria-hidden="true" className={`h-1 w-8 rounded-full ${isChecking ? 'bg-thinking' : 'bg-primary'}`} />
+            {isChecking ? 'THINKING' : 'IDLE'}
           </div>
         </section>
 
@@ -93,6 +204,33 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
             <h2 id="conversation-title" className="text-sm font-medium">Conversation</h2>
             <span className="font-mono text-xs text-muted">Today</span>
           </div>
+          {checkedRepository ? (
+            <div className="flex-1 space-y-6 overflow-y-auto p-6 lg:min-h-0">
+              <div className="ml-auto max-w-[90%] rounded-2xl border border-border bg-raised px-4 py-3">
+                <p className="text-sm">Check the latest build for</p>
+                <p className="mt-1 break-all font-mono text-sm text-primary-light">{checkedRepository}</p>
+              </div>
+              <div className="rounded-2xl border border-border bg-inset p-5" aria-busy={isChecking}>
+                <p className={`font-mono text-xs ${isChecking ? 'text-thinking' : 'text-steel'}`}>
+                  get_build_status · {isChecking ? 'running' : requestError ? 'error' : 'complete'}
+                </p>
+                {isChecking && (
+                  <p role="status" className="mt-3 text-sm text-muted">Checking GitHub Actions…</p>
+                )}
+                {requestError && (
+                  <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-failure">{requestError}</p>
+                )}
+                {response && (
+                  <div role="status">
+                    <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed">{response.text}</p>
+                    <time dateTime={response.receivedAt} className="mt-4 block font-mono text-xs text-muted tabular-nums">
+                      {new Date(response.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </time>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
           <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center lg:min-h-0 lg:overflow-y-auto">
             <Logo />
             <h3 className="mt-6 text-xl font-medium tracking-tight">What would you like to know?</h3>
@@ -100,9 +238,10 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               Build status, failed runs, and useful explanations—all in one conversation.
             </p>
             <p className="mt-6 max-w-72 text-xs leading-relaxed text-steel">
-              Your conversation will appear here once we connect the voice controls.
+              Enter a repository and select Check build status to get started.
             </p>
           </div>
+          )}
         </section>
       </main>
 
