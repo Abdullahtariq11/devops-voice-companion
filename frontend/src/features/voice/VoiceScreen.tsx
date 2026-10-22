@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import Logo from '../../components/Logo'
 import type { McpConnection } from '../../lib/mcpClient'
+import { useBrowserSpeech } from './useBrowserSpeech'
+import { isBuildStatusQuestion } from './voiceCommands'
+import VoiceSettings from './VoiceSettings'
 
 type VoiceScreenProps = {
   connection: McpConnection
@@ -14,29 +17,53 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
   const [requestError, setRequestError] = useState('')
   const [response, setResponse] = useState<{ text: string; receivedAt: string } | null>(null)
   const [checkedRepository, setCheckedRepository] = useState('')
+  const [spokenQuestion, setSpokenQuestion] = useState('')
+  const [heardTranscript, setHeardTranscript] = useState('')
+  const [commandError, setCommandError] = useState('')
   const requestRef = useRef<AbortController | null>(null)
   const hostname = new URL(connection.serverUrl).host
   const canCheckBuild = connection.tools.some((tool) => tool.name === 'get_build_status')
+  const speech = useBrowserSpeech((transcript) => {
+    setHeardTranscript(transcript)
+
+    if (!isBuildStatusQuestion(transcript)) {
+      setCommandError('For now, ask “How’s the build?” or “Check the latest build.” Other voice commands are coming next.')
+      return
+    }
+
+    void handleCheckBuild(transcript)
+  })
+  const voiceState = isChecking ? 'Thinking' : speech.isListening ? 'Listening' : speech.isSpeaking ? 'Speaking' : 'Idle'
 
   useEffect(() => {
     return () => requestRef.current?.abort()
   }, [])
 
-  async function handleCheckBuild() {
-    if (requestRef.current || !canCheckBuild) return
-
+  function validateRepository() {
     const repositoryName = repository.trim()
     const match = /^([a-zA-Z0-9][a-zA-Z0-9-]{0,38})\/([a-zA-Z0-9._-]{1,100})$/.exec(repositoryName)
 
     if (!match || match[2] === '.' || match[2] === '..') {
       setRepositoryError('Enter a repository in owner/repository format, not a URL.')
-      return
+      return null
     }
 
     setRepositoryError('')
+    return { owner: match[1], repo: match[2], name: repositoryName }
+  }
+
+  async function handleCheckBuild(question = '') {
+    if (requestRef.current || !canCheckBuild) return
+
+    const target = validateRepository()
+    if (!target) return
+
+    speech.stopSpeaking()
+    setCommandError('')
     setRequestError('')
     setResponse(null)
-    setCheckedRepository(repositoryName)
+    setCheckedRepository(target.name)
+    setSpokenQuestion(question)
     setIsChecking(true)
 
     const controller = new AbortController()
@@ -46,7 +73,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
       const result = await connection.client.callTool(
         {
           name: 'get_build_status',
-          arguments: { owner: match[1], repo: match[2] },
+          arguments: { owner: target.owner, repo: target.repo },
         },
         { signal: controller.signal },
       )
@@ -63,6 +90,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
         setRequestError(text || 'The server returned no readable build status. Please try again.')
       } else {
         setResponse({ text, receivedAt: new Date().toISOString() })
+        if (question) speech.speak(text)
       }
     } catch {
       if (!controller.signal.aborted) {
@@ -77,6 +105,35 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
       }
     }
   }
+
+  function handleVoiceControl() {
+    if (isChecking) return
+    if (speech.isSpeaking) {
+      speech.stopSpeaking()
+      return
+    }
+    if (speech.isListening) {
+      speech.stopListening()
+      return
+    }
+    if (!canCheckBuild || !validateRepository()) return
+
+    setCommandError('')
+    setHeardTranscript('')
+    speech.startListening()
+  }
+
+  useEffect(() => {
+    function handleSpace(event: KeyboardEvent) {
+      if (event.code !== 'Space' || event.repeat || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.target instanceof Element && event.target.closest('input, textarea, select, button, a, [contenteditable]:not([contenteditable="false"])')) return
+      event.preventDefault()
+      handleVoiceControl()
+    }
+
+    window.addEventListener('keydown', handleSpace)
+    return () => window.removeEventListener('keydown', handleSpace)
+  })
 
   return (
     <div className="flex min-h-svh flex-col lg:h-svh lg:overflow-hidden">
@@ -146,7 +203,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               id="repository"
               type="text"
               value={repository}
-              disabled={isChecking}
+              disabled={isChecking || speech.isListening}
               onChange={(event) => setRepository(event.target.value)}
               aria-invalid={Boolean(repositoryError)}
               aria-describedby={repositoryError ? 'repository-error' : undefined}
@@ -163,7 +220,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
             )}
             <button
               type="submit"
-              disabled={!repository.trim() || isChecking || !canCheckBuild}
+              disabled={!repository.trim() || isChecking || speech.isListening || !canCheckBuild}
               className="mt-3 w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light active:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
             >
               {isChecking ? 'Checking build status…' : 'Check build status'}
@@ -173,29 +230,68 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
             )}
           </form>
 
+          {speech.supportsSynthesis && (
+            <VoiceSettings
+              voices={speech.voices}
+              selectedVoiceURI={speech.selectedVoiceURI}
+              rate={speech.rate}
+              disabled={isChecking || speech.isListening}
+              isSpeaking={speech.isSpeaking}
+              onVoiceChange={speech.changeVoice}
+              onRateChange={speech.changeRate}
+              onPreview={() => speech.speak("Hi, I'm FailWhisperer. Let's find out how your latest build is doing.")}
+              onStop={speech.stopSpeaking}
+            />
+          )}
+
           <div className="relative flex flex-1 flex-col items-center justify-center py-4 text-center">
-            <div className="flex size-36 shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong">
+            <div className="relative flex size-36 shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong">
+              {speech.isListening && (
+                <span aria-hidden="true" className="pointer-events-none absolute inset-3 rounded-full border border-primary/40 motion-safe:animate-ping" />
+              )}
               <button
                 type="button"
-                disabled
-                aria-label="Microphone unavailable: voice controls are not implemented yet"
-                className="flex size-24 cursor-not-allowed items-center justify-center rounded-full border border-border-strong bg-raised text-muted shadow-xl"
+                onClick={handleVoiceControl}
+                disabled={isChecking || (!speech.isSpeaking && (!speech.supportsRecognition || !canCheckBuild))}
+                aria-label={speech.isSpeaking ? 'Stop speaking' : speech.isListening ? 'Stop listening' : 'Start listening'}
+                aria-pressed={speech.isListening || speech.isSpeaking}
+                className={`relative flex size-24 items-center justify-center rounded-full border shadow-xl transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${isChecking ? 'border-thinking/30 bg-thinking/10 text-thinking' : speech.isListening || speech.isSpeaking ? 'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 active:bg-primary/30' : 'border-border-strong bg-raised text-muted hover:border-primary/40 hover:text-primary active:bg-surface-hover'}`}
               >
+                {speech.isSpeaking ? (
+                  <span aria-hidden="true" className="flex h-10 items-center gap-1">
+                    {[16, 28, 36, 24, 12].map((height, index) => (
+                      <span key={index} className="w-1 rounded-full bg-primary motion-safe:animate-pulse" style={{ height, animationDelay: `${index * 120}ms` }} />
+                    ))}
+                  </span>
+                ) : (
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="size-8">
                   <rect x="9" y="3" width="6" height="12" rx="3" />
                   <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" />
                 </svg>
+                )}
               </button>
             </div>
-            <h3 className="mt-5 text-lg font-medium">Check your latest build</h3>
+            <h3 className="mt-5 text-lg font-medium">
+              {isChecking ? 'Checking build status…' : speech.isListening ? 'Listening…' : speech.isSpeaking ? 'Speaking — tap to interrupt' : speech.supportsRecognition ? 'Tap to talk' : 'Use Check build status'}
+            </h3>
             <p className="mt-2 max-w-64 text-sm leading-relaxed text-muted">
-              Enter a repository above to check GitHub Actions. Voice controls are coming next.
+              {speech.isListening ? 'Ask “How’s the build?” Tap again to cancel.' : speech.isSpeaking ? 'Reading the answer from your MCP server.' : speech.supportsRecognition ? 'Ask “How’s the build?” · or press Space' : 'Speech recognition is unavailable in this browser. The button above still works.'}
             </p>
+            {heardTranscript && (
+              <p role="status" className="mt-3 max-w-72 text-xs text-steel">Heard: “{heardTranscript}”</p>
+            )}
+            {(speech.speechError || commandError) && (
+              <p role="alert" className="mt-3 max-w-72 text-sm text-failure">{commandError || speech.speechError}</p>
+            )}
           </div>
 
-          <div role="status" className="relative flex items-center justify-center gap-2 font-mono text-[10px] tracking-wider text-muted">
-            <span aria-hidden="true" className={`h-1 w-8 rounded-full ${isChecking ? 'bg-thinking' : 'bg-primary'}`} />
-            {isChecking ? 'THINKING' : 'IDLE'}
+          <div role="status" aria-label={`Voice state: ${voiceState}`} className="relative flex flex-wrap items-center justify-center gap-3 font-mono text-[10px] tracking-wider">
+            {['Idle', 'Listening', 'Thinking', 'Speaking'].map((state) => (
+              <span key={state} className={`flex flex-col items-center gap-2 ${state === voiceState ? state === 'Thinking' ? 'text-thinking' : 'text-primary' : 'text-muted'}`}>
+                <span aria-hidden="true" className={`h-1 rounded-full ${state === voiceState ? state === 'Thinking' ? 'w-8 bg-thinking' : 'w-8 bg-primary' : 'w-3 bg-border-strong'}`} />
+                {state.toUpperCase()}
+              </span>
+            ))}
           </div>
         </section>
 
@@ -207,7 +303,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
           {checkedRepository ? (
             <div className="flex-1 space-y-6 overflow-y-auto p-6 lg:min-h-0">
               <div className="ml-auto max-w-[90%] rounded-2xl border border-border bg-raised px-4 py-3">
-                <p className="text-sm">Check the latest build for</p>
+                <p className="text-sm">{spokenQuestion || 'Check the latest build for'}</p>
                 <p className="mt-1 break-all font-mono text-sm text-primary-light">{checkedRepository}</p>
               </div>
               <div className="rounded-2xl border border-border bg-inset p-5" aria-busy={isChecking}>
@@ -226,6 +322,16 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
                     <time dateTime={response.receivedAt} className="mt-4 block font-mono text-xs text-muted tabular-nums">
                       {new Date(response.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </time>
+                    {speech.supportsSynthesis && (
+                      <button
+                        type="button"
+                        disabled={speech.isListening || isChecking}
+                        onClick={() => speech.isSpeaking ? speech.stopSpeaking() : speech.speak(response.text)}
+                        className="mt-4 min-h-11 rounded-full border border-border px-4 text-xs text-primary-light transition-colors duration-200 hover:bg-surface-hover active:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
+                      >
+                        {speech.isSpeaking ? 'Stop reading' : 'Read aloud'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -238,7 +344,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               Build status, failed runs, and useful explanations—all in one conversation.
             </p>
             <p className="mt-6 max-w-72 text-xs leading-relaxed text-steel">
-              Enter a repository and select Check build status to get started.
+              Enter a repository, then ask “How’s the build?” or select Check build status.
             </p>
           </div>
           )}
@@ -246,7 +352,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
       </main>
 
       <footer className="shrink-0 px-6 pb-5 text-center text-xs text-muted">
-        Connected via MCP · Voice controls coming next
+        Connected via MCP · Speech recognition may use your browser’s online service
       </footer>
     </div>
   )
