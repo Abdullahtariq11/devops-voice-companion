@@ -1,9 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Logo from '../../components/Logo'
+import { connectToMcpServer } from '../../lib/mcpClient'
+
+type McpConnection = Awaited<ReturnType<typeof connectToMcpServer>>
 
 function SetupScreen() {
     const [serverUrl, setServerUrl] = useState('');
+    const [authToken, setAuthToken] = useState('')
     const [error, setError] = useState('');
+    const [isConnecting, setIsConnecting] = useState(false)
+    const [connection, setConnection] = useState<McpConnection | null>(null)
+    const connectionRef = useRef<McpConnection | null>(null)
+    const isMounted = useRef(false)
+
+    useEffect(() => {
+        isMounted.current = true
+
+        return () => {
+            isMounted.current = false
+            if (connectionRef.current) {
+                void connectionRef.current.client.close().catch(() => undefined)
+            }
+        }
+    }, [])
 
     function validateServerUrl() {
         try {
@@ -23,8 +42,36 @@ function SetupScreen() {
             }
 
             setError('')
+            return true
         } catch {
             setError("Couldn't reach that server — check the URL and try again")
+            return false
+        }
+    }
+
+    async function handleConnect() {
+        if (isConnecting || connection || !validateServerUrl()) return
+
+        setIsConnecting(true)
+
+        try {
+            const result = await connectToMcpServer(serverUrl, authToken)
+
+            if (!isMounted.current) {
+                await result.client.close().catch(() => undefined)
+                return
+            }
+
+            connectionRef.current = result
+            setConnection(result)
+        } catch {
+            if (isMounted.current) {
+                setError("Couldn't connect to that MCP server — check the URL and try again")
+            }
+        } finally {
+            if (isMounted.current) {
+                setIsConnecting(false)
+            }
         }
     }
 
@@ -61,7 +108,7 @@ function SetupScreen() {
                     noValidate
                     onSubmit={(event) => {
                         event.preventDefault()
-                        validateServerUrl()
+                        void handleConnect()
                     }}
                 >
                     <div className="space-y-2">
@@ -73,6 +120,7 @@ function SetupScreen() {
                             name="serverUrl"
                             type="url"
                             value={serverUrl}
+                            disabled={isConnecting || Boolean(connection)}
                             onChange={(event) => setServerUrl(event.target.value)}
                             aria-invalid={Boolean(error)}
                             aria-describedby={error ? 'connection-error' : undefined}
@@ -95,6 +143,9 @@ function SetupScreen() {
                             id="auth-token"
                             name="authToken"
                             type="password"
+                            value={authToken}
+                            disabled={isConnecting || Boolean(connection)}
+                            onChange={(event) => setAuthToken(event.target.value)}
                             autoComplete="off"
                             placeholder="Bearer token"
                             className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
@@ -103,11 +154,20 @@ function SetupScreen() {
 
                     <button
                         type="submit"
-                        disabled={!serverUrl.trim()}
+                        disabled={!serverUrl.trim() || isConnecting || Boolean(connection)}
                         className="w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                        Connect to server
+                        {isConnecting
+                            ? 'Discovering tools…'
+                            : connection
+                                ? 'Server connected'
+                                : 'Connect to server'}
                     </button>
+                    <p role="status" className="text-sm text-primary">
+                        {isConnecting
+                            ? 'Discovering tools…'
+                            : connection && `${connection.tools.length} tools found and ready to use`}
+                    </p>
                 </form>
             </section>
         </main>
