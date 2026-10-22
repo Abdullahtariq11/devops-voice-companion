@@ -6,10 +6,11 @@ import type { McpConnection } from '../../lib/mcpClient'
 type SetupScreenProps = {
     connection: McpConnection | null
     onConnected: (connection: McpConnection) => void
+    onStart: () => void
 }
 
-function SetupScreen({ connection, onConnected }: SetupScreenProps) {
-    const [serverUrl, setServerUrl] = useState('');
+function SetupScreen({ connection, onConnected, onStart }: SetupScreenProps) {
+    const [serverUrl, setServerUrl] = useState(connection?.serverUrl ?? '');
     const [authToken, setAuthToken] = useState('')
     const [error, setError] = useState('');
     const [isConnecting, setIsConnecting] = useState(false)
@@ -177,6 +178,15 @@ function SetupScreen({ connection, onConnected }: SetupScreenProps) {
                                 </li>
                             ))}
                         </ul>
+                    )}
+                    {connection && (
+                        <button
+                            type="button"
+                            onClick={onStart}
+                            className="w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light active:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
+                        >
+                            Start talking
+                        </button>
                     )}
                 </form>
             </section>

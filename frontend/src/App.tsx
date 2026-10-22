@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import SetupScreen from './features/connection/SetupScreen'
+import VoiceScreen from './features/voice/VoiceScreen'
 import type { McpConnection } from './lib/mcpClient'
 
 function App() {
   const [connection, setConnection] = useState<McpConnection | null>(null)
   const connectionRef = useRef<McpConnection | null>(null)
+  const [screen, setScreen] = useState<'setup' | 'voice'>('setup')
 
   useEffect(() => {
     return () => {
@@ -23,7 +25,22 @@ function App() {
     setConnection(result)
   }
 
-  return <SetupScreen connection={connection} onConnected={handleConnected} />
+  if (screen === 'voice' && connection) {
+    return (
+      <VoiceScreen
+        connection={connection}
+        onBack={() => setScreen('setup')}
+      />
+    )
+  }
+
+  return (
+    <SetupScreen
+      connection={connection}
+      onConnected={handleConnected}
+      onStart={() => setScreen('voice')}
+    />
+  )
 }
 
 export default App
