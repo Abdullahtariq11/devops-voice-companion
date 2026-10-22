@@ -9,7 +9,16 @@ function SetupScreen() {
         try {
             const url = new URL(serverUrl.trim())
 
-            if (url.protocol !== 'https:' || url.username || url.password) {
+            const isLocalDevelopment =
+                import.meta.env.DEV &&
+                url.protocol === 'http:' &&
+                ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+
+            if (
+                (url.protocol !== 'https:' && !isLocalDevelopment) ||
+                url.username ||
+                url.password
+            ) {
                 throw new Error('Invalid server URL')
             }
 
