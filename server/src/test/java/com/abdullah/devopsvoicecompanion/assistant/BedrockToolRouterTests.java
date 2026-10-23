@@ -302,8 +302,8 @@ class BedrockToolRouterTests {
         List.of(new AssistantTurn("assistant", "The latest build passed."))));
     assertEquals("A pipeline is a sequence of automated build, test, and deployment stages.", response.message());
     assertTrue(response.toolCalls().isEmpty());
-    assertEquals(2, requests.size());
-    var explanation = requests.get(1);
+    assertEquals(3, requests.size());
+    var explanation = requests.get(2);
     assertNotNull(explanation.toolConfig().toolChoice().any());
     assertEquals(1, explanation.messages().size());
     assertEquals(1, explanation.messages().getFirst().content().size());
@@ -335,7 +335,7 @@ class BedrockToolRouterTests {
       var builder = ConverseRequest.builder();
       customize.accept(builder);
       requests.add(builder.build());
-      var block = requests.size() == 1
+      var block = isScopeRequest(builder.build()) ? scopeCall("pipeline_request") : requests.size() == 2
           ? call("explain_pipeline", Document.fromMap(Map.of()))
           : call("provide_pipeline_explanation", Document.fromMap(Map.of(
               "kind", Document.fromString(kind), "answer", Document.fromString(answer))));
@@ -360,10 +360,100 @@ class BedrockToolRouterTests {
           Consumer<ConverseRequest.Builder> customize = invocation.getArgument(0);
           var builder = ConverseRequest.builder();
           customize.accept(builder);
-          capturedRequest = builder.build();
+          var request = builder.build();
+          if (isScopeRequest(request)) {
+            return ConverseResponse.builder().stopReason(StopReason.TOOL_USE)
+                .output(output -> output.message(message -> message.content(scopeCall("pipeline_request")))).build();
+          }
+          capturedRequest = request;
           return ConverseResponse.builder().stopReason(reason)
               .output(output -> output.message(message -> message
                   .role(ConversationRole.ASSISTANT).content(blocks))).build();
         }).when(client).converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"thank you", "THANK YOU!", "Thanks.", "Thank you so much!", "bye", "I love you", "love you!"})
+  void socialClosuresNeverRepeatPreviousInvestigationOrCallAws(String message) {
+    var response = router.route(new AssistantRequest(message, "owner/repo", 42L,
+        List.of(new AssistantTurn("user", "Investigate run 42 in depth"),
+            new AssistantTurn("assistant", "Observed test failure. Possible cause: simulation."))));
+    assertTrue(response.toolCalls().isEmpty());
+    assertTrue(response.message().contains("CI/CD"));
+    verifyNoInteractions(client);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"out_of_scope", "social", "ambiguous"})
+  void isolatedScopeGateStopsRoutingRegardlessOfFailureHistory(String kind) {
+    doAnswer(invocation -> {
+      Consumer<ConverseRequest.Builder> customize = invocation.getArgument(0);
+      var builder = ConverseRequest.builder();
+      customize.accept(builder);
+      capturedRequest = builder.build();
+      return ConverseResponse.builder().stopReason(StopReason.TOOL_USE)
+          .output(output -> output.message(message -> message.content(scopeCall(kind)))).build();
+    }).when(client).converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any());
+    var response = router.route(new AssistantRequest("Can you recommend a movie?", "owner/repo", 42L,
+        List.of(new AssistantTurn("user", "Investigate that failure"))));
+    assertTrue(response.toolCalls().isEmpty());
+    assertTrue(isScopeRequest(capturedRequest));
+    assertEquals(1, capturedRequest.messages().getFirst().content().size());
+    assertEquals("Can you recommend a movie?", capturedRequest.messages().getFirst().content().getFirst().text());
+    assertFalse(capturedRequest.messages().toString().contains("Investigate that failure"));
+    assertFalse(capturedRequest.messages().toString().contains("owner/repo"));
+    verify(client, times(1)).converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any());
+  }
+
+  @Test
+  void gratitudeWithAnExplicitNewRequestStillRoutesNormally() {
+    givenResponse(StopReason.TOOL_USE, call("get_failure_logs", arguments("owner", "repo")));
+    var response = router.route(new AssistantRequest("Thanks, now show the failure logs", "owner/repo"));
+    assertEquals("get_failure_logs", response.toolCalls().getFirst().name());
+  }
+
+  @Test
+  void invalidScopeResponseFailsClosedWithoutRouting() {
+    when(client.converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any()))
+        .thenReturn(ConverseResponse.builder().stopReason(StopReason.END_TURN)
+            .output(output -> output.message(message -> message.content(ContentBlock.fromText("Just run the old tool")))).build());
+    assertThrows(IllegalStateException.class,
+        () -> router.route(new AssistantRequest("A new question", "owner/repo")));
+    verify(client, times(1)).converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any());
+  }
+
+  private boolean isScopeRequest(ConverseRequest request) {
+    return request.toolConfig().tools().getFirst().toolSpec().name().equals("classify_current_message");
+  }
+
+  @Test
+  void generalScopeGoesDirectlyToIsolatedExplanationWithoutRepositoryRouting() {
+    var requests = new java.util.ArrayList<ConverseRequest>();
+    doAnswer(invocation -> {
+      Consumer<ConverseRequest.Builder> customize = invocation.getArgument(0);
+      var builder = ConverseRequest.builder();
+      customize.accept(builder);
+      var request = builder.build();
+      requests.add(request);
+      var block = isScopeRequest(request) ? scopeCall("general")
+          : call("provide_pipeline_explanation", Document.fromMap(Map.of(
+              "kind", Document.fromString("general"), "answer", Document.fromString("A pipeline automates build and test steps."))));
+      return ConverseResponse.builder().stopReason(StopReason.TOOL_USE)
+          .output(output -> output.message(message -> message.content(block))).build();
+    }).when(client).converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any());
+    var response = router.route(new AssistantRequest("What is a pipeline?", "owner/repo", 42L,
+        List.of(new AssistantTurn("user", "Investigate the last failure"))));
+    assertEquals("A pipeline automates build and test steps.", response.message());
+    assertTrue(response.toolCalls().isEmpty());
+    assertEquals(2, requests.size());
+    for (var request : requests) {
+      assertEquals(1, request.messages().getFirst().content().size());
+      assertFalse(request.messages().toString().contains("owner/repo"));
+      assertFalse(request.messages().toString().contains("Investigate the last failure"));
+    }
+  }
+
+  private ContentBlock scopeCall(String kind) {
+    return call("classify_current_message", Document.fromMap(Map.of("kind", Document.fromString(kind))));
   }
 }
