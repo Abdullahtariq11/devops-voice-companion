@@ -7,6 +7,22 @@ An independent web voice client and self-hosted MCP server for the Amazon Develo
 Hackathon. This demonstrates an Alexa+-style experience; it is **not an official Alexa
 integration** and does not require an Echo or Alexa+ preview access.
 
+Built for the Amazon Developer Hackathon (Alexa+ track, AWS Builder mini-challenge).
+
+Live demo: https://devops-voice-companion.vercel.app/
+Demo video: https://www.youtube.com/watch?v=PWXFrd_PJCA
+
+## Try it / test access
+
+Open the live client and use its Help page for a walkthrough. The demo
+backend is token protected because the tools read GitHub data and call
+Amazon Bedrock on the project owner's accounts, so it is not open to
+anonymous traffic. To request a server URL and test token, contact me
+through my GitHub profile. Hackathon judges: the testing instructions
+on the Devpost submission explain how to request access, or contact me
+the same way. You can also run the whole stack locally with your own
+GitHub token and AWS credentials (see Run locally below).
+
 ## How it works
 
 ```text
