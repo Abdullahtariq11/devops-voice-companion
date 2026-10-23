@@ -12,10 +12,64 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Check out demo source
-        uses: actions/checkout@v7
-
       - name: Run demo tests
-        working-directory: demos/payment_failure
+        shell: bash
         run: |
-          python3 -m unittest -v test_payment_service
+          set -euo pipefail
+
+          payments=(60 30 10)
+          expected_total=100
+          actual_total=0
+          processed_count=0
+
+          echo "::notice::This is an intentional, isolated workflow failure for the FailWhisperer live demo."
+          echo "::group::Demo context and assertion contract"
+          echo "Scenario: calculate the combined total of every payment in an order."
+          echo "Assertion: every input payment must be included exactly once."
+          echo "This is a Bash calculation/assertion, not a Java or Python test execution."
+          echo "Repository: ${GITHUB_REPOSITORY:-local}"
+          echo "Branch/ref: ${GITHUB_REF_NAME:-local}"
+          echo "Commit: ${GITHUB_SHA:-local}"
+          echo "Run ID: ${GITHUB_RUN_ID:-local}"
+          echo "Workflow source: .github/workflows/failure-demo.yml"
+          echo "No application deployment, external API, customer data, or secrets are used."
+          echo "::endgroup::"
+
+          echo "::group::Input payments"
+          for payment_index in "${!payments[@]}"; do
+            printf 'Payment index=%d, amount=%d\n' "$payment_index" "${payments[$payment_index]}"
+          done
+          echo "Input payment count: ${#payments[@]}"
+          echo "Expected payment total: $expected_total"
+          echo "::endgroup::"
+
+          echo "::group::Calculation trace"
+          for ((payment_index=0; payment_index<${#payments[@]}-1; payment_index++)); do
+            previous_total=$actual_total
+            actual_total=$((actual_total + payments[payment_index]))
+            processed_count=$((processed_count + 1))
+            printf 'Processed index=%d: previous_total=%d + amount=%d -> running_total=%d\n' \
+              "$payment_index" "$previous_total" "${payments[$payment_index]}" "$actual_total"
+          done
+          echo "::endgroup::"
+
+          echo "::group::Assertion results"
+          echo "Assertion name: payment_total_includes_every_payment"
+          echo "Input payments: ${payments[*]}"
+          echo "Processed payment count: $processed_count of ${#payments[@]}"
+          echo "Expected payment total: $expected_total. Actual payment total: $actual_total."
+          echo "Difference (expected minus actual): $((expected_total - actual_total))"
+          echo "::endgroup::"
+
+          if ((actual_total != expected_total)); then
+            echo "FAIL: payment_total_includes_every_payment"
+            echo "Observed failure: expected $expected_total, actual $actual_total; processed $processed_count of ${#payments[@]} payments."
+            echo "Diagnostic evidence: compare the input indices against the processed indices in the trace."
+            echo "Source to inspect at this run's commit: the payment loop in .github/workflows/failure-demo.yml."
+            echo "Scope: intentionally faulty demo calculation; no evidence of a production incident."
+            echo "::error file=.github/workflows/failure-demo.yml,title=Payment total assertion failed::Expected $expected_total, actual $actual_total. Processed $processed_count of ${#payments[@]} payments."
+            echo "Result: 1 assertion executed, 1 failed. Exiting with code 1 intentionally."
+            exit 1
+          fi
+
+          echo "PASS: payment_total_includes_every_payment"

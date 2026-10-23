@@ -65,7 +65,7 @@ then “Show the logs for that failure.” Missing or inaccessible logs remain a
 ### Deeper failure investigation
 
 For a repeatable live demo, use the manual-only [intentional payment test failure](demos/payment_failure/README.md).
-It runs a real assertion against an isolated buggy calculation without breaking normal CI.
+Its YAML contains a real shell assertion against an intentionally buggy calculation without breaking normal CI.
 
 Ask **“Investigate that failure in depth”** or **“Investigate the latest failure”**.
 The read-only `investigate_failure` tool combines a longer log excerpt with up to
