@@ -52,7 +52,8 @@ class BedrockToolRouterTests {
     assertEquals(ConversationRole.USER, message.role());
     assertEquals("Selected repository: owner/repo", message.content().getFirst().text());
     assertEquals("Is everything green?", message.content().getLast().text());
-    assertEquals(4, capturedRequest.toolConfig().tools().size());
+    assertEquals(6, capturedRequest.toolConfig().tools().size());
+    assertNotNull(capturedRequest.toolConfig().toolChoice().any());
     var tool = capturedRequest.toolConfig().tools().getFirst().toolSpec();
     assertEquals("get_build_status", tool.name());
     var schema = tool.inputSchema().json().asMap();
@@ -80,7 +81,7 @@ class BedrockToolRouterTests {
 
     var result = router.route(new AssistantRequest("What about it?", "owner/repo"));
 
-    assertEquals("Do you want the latest build status?", result.message());
+    assertTrue(result.message().startsWith("Would you like the latest build status"));
     assertTrue(result.toolCalls().isEmpty());
   }
 
@@ -231,6 +232,110 @@ class BedrockToolRouterTests {
         "owner", Document.fromString("owner"), "repo", Document.fromString("repo"), "limit", Document.fromNumber(3)))));
     assertEquals(3L, router.route(new AssistantRequest("List three failures", "owner/repo"))
         .toolCalls().getFirst().arguments().get("limit"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "<thinking>Internal planning only</thinking>",
+      "<thinking>Unclosed internal planning",
+      "<thinking>Internal planning</thinking>There were no failures.",
+      "There were no previous failures because the latest build passed."
+  })
+  void neverExposesFreeTextReasoningOrUnverifiedBuildClaims(String providerText) {
+    givenResponse(StopReason.END_TURN, ContentBlock.fromText(providerText));
+    var response = router.route(new AssistantRequest("failure?", "owner/repo", null,
+        List.of(new AssistantTurn("assistant", "The latest build passed."))));
+    assertTrue(response.message().startsWith("Would you like"));
+    assertFalse(response.message().contains("<thinking>"));
+    assertFalse(response.message().contains("no failures"));
+    assertFalse(response.message().contains("no previous failures"));
+    assertTrue(response.toolCalls().isEmpty());
+  }
+
+  @Test
+  void requestsFreshFailuresAfterSuccessfulBuildContext() {
+    givenResponse(StopReason.TOOL_USE, call("get_failed_runs", arguments("owner", "repo")));
+    var response = router.route(new AssistantRequest("failure?", "owner/repo", null,
+        List.of(new AssistantTurn("assistant", "The latest build passed."))));
+    assertEquals("get_failed_runs", response.toolCalls().getFirst().name());
+    String policy = capturedRequest.system().getFirst().text();
+    assertTrue(policy.contains("does NOT mean there are no earlier failed runs"));
+    assertTrue(policy.contains("Never answer live repository questions from conversation history alone"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"What is the weather?", "Tell me a joke", "Who won the football match?"})
+  void returnsScopeMessageForUnrelatedQuestions(String question) {
+    givenResponse(StopReason.TOOL_USE, call("clarify_request", Document.fromMap(Map.of(
+        "reason", Document.fromString("out_of_scope")))));
+    var response = router.route(new AssistantRequest(question, "owner/repo"));
+    assertEquals("I can help with CI/CD pipelines, builds, deployment failures, and logs. "
+        + "Please ask a pipeline-related question.", response.message());
+    assertTrue(response.toolCalls().isEmpty());
+  }
+
+  @Test
+  void acceptsOnlyControlledClarificationReasons() {
+    givenResponse(StopReason.TOOL_USE, call("clarify_request", Document.fromMap(Map.of(
+        "reason", Document.fromString("unsupported_action")))));
+    assertTrue(router.route(new AssistantRequest("Deploy it", "owner/repo")).message().contains("cannot deploy"));
+    givenResponse(StopReason.TOOL_USE, call("clarify_request", Document.fromMap(Map.of(
+        "reason", Document.fromString("ambiguous"), "answer", Document.fromString("Made up build status")))));
+    assertThrows(IllegalStateException.class, () -> router.route(new AssistantRequest("Check it", "owner/repo")));
+    givenResponse(StopReason.TOOL_USE, call("clarify_request", Document.fromMap(Map.of(
+        "reason", Document.fromString("made_up")))));
+    assertThrows(IllegalStateException.class, () -> router.route(new AssistantRequest("Check it", "owner/repo")));
+  }
+
+  @Test
+  void explainsGeneralConceptsWithoutRepositoryOrHistoryInExplanationRequest() {
+    var requests = givenExplanation("general", "A pipeline is a sequence of automated build, test, and deployment stages.");
+    var response = router.route(new AssistantRequest("What is a CI/CD pipeline?", "owner/repo", 42L,
+        List.of(new AssistantTurn("assistant", "The latest build passed."))));
+    assertEquals("A pipeline is a sequence of automated build, test, and deployment stages.", response.message());
+    assertTrue(response.toolCalls().isEmpty());
+    assertEquals(2, requests.size());
+    var explanation = requests.get(1);
+    assertNotNull(explanation.toolConfig().toolChoice().any());
+    assertEquals(1, explanation.messages().size());
+    assertEquals(1, explanation.messages().getFirst().content().size());
+    assertEquals("What is a CI/CD pipeline?", explanation.messages().getFirst().content().getFirst().text());
+    assertFalse(explanation.messages().toString().contains("owner/repo"));
+    assertFalse(explanation.messages().toString().contains("latest build passed"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"<thinking>internal planning</thinking>Final answer", "<analysis>private", "&lt;thinking&gt;private", "```analysis private"})
+  void rejectsInternalMarkupEvenInsideStructuredExplanation(String answer) {
+    givenExplanation("general", answer);
+    assertThrows(IllegalStateException.class,
+        () -> router.route(new AssistantRequest("What is a pipeline?", "owner/repo")));
+  }
+
+  @Test
+  void generalExplanationRechecksScopeAndRefusesLiveFacts() {
+    givenExplanation("out_of_scope", "Ignored provider text");
+    assertTrue(router.route(new AssistantRequest("Weather?", "owner/repo")).message().contains("pipeline-related"));
+    givenExplanation("needs_live_data", "The build passed.");
+    assertTrue(router.route(new AssistantRequest("Is the build green?", "owner/repo")).message().startsWith("Would you like"));
+  }
+
+  private List<ConverseRequest> givenExplanation(String kind, String answer) {
+    var requests = new java.util.ArrayList<ConverseRequest>();
+    doAnswer(invocation -> {
+      Consumer<ConverseRequest.Builder> customize = invocation.getArgument(0);
+      var builder = ConverseRequest.builder();
+      customize.accept(builder);
+      requests.add(builder.build());
+      var block = requests.size() == 1
+          ? call("explain_pipeline", Document.fromMap(Map.of()))
+          : call("provide_pipeline_explanation", Document.fromMap(Map.of(
+              "kind", Document.fromString(kind), "answer", Document.fromString(answer))));
+      return ConverseResponse.builder().stopReason(StopReason.TOOL_USE)
+          .output(output -> output.message(message -> message
+              .role(ConversationRole.ASSISTANT).content(block))).build();
+    }).when(client).converse(org.mockito.ArgumentMatchers.<Consumer<ConverseRequest.Builder>>any());
+    return requests;
   }
 
   private static Document arguments(String owner, String repo) {

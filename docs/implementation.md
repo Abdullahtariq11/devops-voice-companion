@@ -52,17 +52,29 @@ three-second connection timeout and a five-second read timeout per request.
 
 `BedrockToolRouter.route(AssistantRequest)` sends a transcript and selected repository
 to Nova Lite using Bedrock Converse tool calling. All four approved read-only tools
-are exposed. The result is an `AssistantResponse` containing either one validated tool
-call or a conversational clarification with no calls. The router does not execute MCP
+are exposed, alongside internal `clarify_request` and `explain_pipeline` decisions that
+are never dispatched to MCP. The result is an `AssistantResponse` containing either one validated tool
+call or a controlled clarification/general explanation with no calls. The router does not execute MCP
 tools, retrieve GitHub data, or report a build result itself.
 
 Messages are limited to 2000 characters, with up to six 4000-character history entries.
 Repository names are validated before calling AWS. Tool responses must name an approved
 tool and supply `owner` and `repo` for the selected repository, with only approved
 optional `limit` or `runId` fields. Unknown tools, extra arguments, cross-repository calls,
-multiple calls, and truncated or empty responses are rejected. Model text alongside a
-tool request is discarded rather than treated as verified build evidence. Requests have
-a 30-second overall timeout and a 15-second attempt timeout.
+multiple calls, and truncated or empty responses are rejected. Tool choice is explicitly
+`any`, requiring structured decisions instead of Nova's default free-text planning.
+Raw routing text is never forwarded, even if the provider unexpectedly returns a text-only
+turn: a fixed clarification is returned instead. This prevents internal planning or
+unverified build claims from becoming a displayed/spoken routing response.
+Each AWS request has a 30-second overall timeout and a 15-second attempt timeout.
+
+General CI/CD questions use a second, isolated Bedrock call with only the current question,
+not the repository or conversational history. It must return a structured user-facing
+explanation or classify the question as requiring live data/out of scope. Explanations
+are bounded to 2000 characters and rejected if they contain recognized internal planning
+markup. Clarification and off-topic responses are fixed application text, not arbitrary
+model prose. The frontend routing timeout is 70 seconds to accommodate the two-call path.
+These educational answers are model-generated general guidance, not verified repository findings.
 
 `POST /api/assistant/route` exposes this plan to the browser. Both typed and spoken
 questions use it; phrase matching has been removed. The browser validates the plan again
@@ -77,8 +89,8 @@ The API admits at most four simultaneous model requests per server instance. Pro
 errors are sanitized. CORS accepts explicit `FRONTEND_ORIGINS` for MCP and the routing API.
 `APP_AUTH_TOKEN` protects both endpoints when set; `APP_ENV=production` requires a token.
 See [deployment](deployment.md) for the required production configuration. The controller
-does not implement multi-user authentication or distributed rate limiting. Clarification
-wording and relevance are model-generated, not guaranteed.
+does not implement multi-user authentication or distributed rate limiting. Semantic
+classification is still model-based and should be verified with representative live questions.
 
 Run its mocked tests without making live AWS calls:
 

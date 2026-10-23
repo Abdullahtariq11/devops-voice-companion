@@ -283,7 +283,7 @@ export default function VoiceScreen({ connection, onBack, onHelp }: VoiceScreenP
               </button>
             </div>
             <h3 className="mt-5 text-lg font-medium">
-              {isChecking ? activities.at(-1)?.name ?? 'Choosing the right tool…' : speech.isListening ? 'Listening…' : speech.isSpeaking ? 'Speaking — tap to interrupt' : speech.supportsRecognition ? 'Tap to talk' : 'Type a question'}
+              {isChecking ? activities.at(-1)?.name ?? 'Thinking about your question…' : speech.isListening ? 'Listening…' : speech.isSpeaking ? 'Speaking — tap to interrupt' : speech.supportsRecognition ? 'Tap to talk' : 'Type a question'}
             </h3>
             <p className="mt-2 max-w-64 text-sm leading-relaxed text-muted">
               {speech.isListening ? 'Ask about your builds or failures. Tap again to cancel.' : speech.isSpeaking ? 'Reading the answer from your MCP server.' : speech.supportsRecognition ? 'Ask naturally · or press Space' : 'Speech recognition is unavailable. Use the text field in Conversation.'}
@@ -326,7 +326,7 @@ export default function VoiceScreen({ connection, onBack, onHelp }: VoiceScreenP
                   ))}
                 </ul>
                 {isChecking && (
-                  <p role="status" className="mt-3 text-sm text-muted">{activities.length ? 'Checking GitHub evidence…' : 'Bedrock is choosing the right tool…'}</p>
+                  <p role="status" className="mt-3 text-sm text-muted">{activities.length ? 'Checking GitHub evidence…' : 'Bedrock is preparing your answer…'}</p>
                 )}
                 {requestError && (
                   <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-failure">{requestError}</p>

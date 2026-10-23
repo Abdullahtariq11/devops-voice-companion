@@ -23,6 +23,12 @@ Follow-up questions carry bounded conversation context and the previous run ID.
 The AI cannot deploy, rerun builds, or modify repositories. A failed assertion does
 not establish a deeper root cause; summaries distinguish observations from uncertainty.
 
+You can also ask general CI/CD questions such as “What is a pipeline?” or “What is a
+flaky test?” Educational explanations are generated separately, without repository
+status or conversation history, and are not presented as findings about your code.
+Unrelated requests receive a pipeline-only scope message. Deploying, rerunning builds,
+and editing code are unsupported. Internal model planning is not a user-facing answer.
+
 ## Stack
 
 - `server/`: Java 25, Spring Boot, Spring AI MCP, AWS SDK for Bedrock.
