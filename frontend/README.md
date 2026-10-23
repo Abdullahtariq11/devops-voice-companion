@@ -21,13 +21,17 @@ npm run lint
 1. Connect to the running MCP server and select **Start talking**.
 2. Enter a repository in `owner/repository` format.
 3. Select the microphone (or press Space outside form controls) and allow microphone access.
-4. Ask **How's the build?** or **Check the latest build**.
+4. Ask **How's the build?**, **What failed recently?**, or **Why did the latest build fail?**.
 
-The recognized question calls `get_build_status` using the entered repository. The answer appears
+The recognized question goes to the backend Bedrock router, which selects an approved MCP tool.
+The browser executes the tool using the entered repository. The answer appears
 in Conversation and is read aloud when speech synthesis is available. Tap the microphone again
-to cancel listening or interrupt playback. Other voice intents are not implemented yet.
+to cancel listening or interrupt playback. Typed questions use the same AI flow, and suggested
+prompts are clickable. Follow-ups such as **explain that failure** use bounded conversation context.
+For latest-failure explanations the browser resolves the most recent failed run first.
+Raw logs are shown rather than spoken; ask for a summary to hear an explanation.
 
-**Check build status** remains available without a microphone. Its response has a **Read aloud**
+**Check build status** remains available without a microphone or the routing API. Its response has a **Read aloud**
 button for optional playback. Leaving the voice screen cancels recognition, playback, and pending requests.
 
 Open **Voice & playback** to choose an available voice and adjust speaking speed (0.75–1.25×).
@@ -40,6 +44,14 @@ are shown. Voice quality depends on the browser and installed voices; no externa
 Recognition requires browser support, permission, and a secure context (HTTPS or localhost).
 Some browsers use an online recognition service; audio is not guaranteed to stay on your device.
 See the [browser speech recognition documentation](https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognition).
+
+## Deployment
+
+Use Vercel with Root Directory `frontend`, Vite preset, `npm ci`, `npm run build`, and output `dist`.
+Set the public `VITE_MCP_SERVER_URL` to the Railway HTTPS `/mcp` endpoint; `.env.example` shows
+the expected format. Enter the private server bearer token in the Connect form, never a `VITE_*`
+variable. Only the server URL is saved locally. See [the deployment checklist](../docs/deployment.md)
+for Railway origins, API access protection, health checks, and end-to-end verification.
 
 ## Styling
 
