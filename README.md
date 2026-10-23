@@ -28,6 +28,8 @@ flaky test?” Educational explanations are generated separately, without reposi
 status or conversation history, and are not presented as findings about your code.
 Unrelated requests receive a pipeline-only scope message. Deploying, rerunning builds,
 and editing code are unsupported. Internal model planning is not a user-facing answer.
+Standalone thanks receive a brief acknowledgment without rerunning tools. Other questions
+are scope-checked without conversation history before any repository tool is selected.
 
 ## Stack
 

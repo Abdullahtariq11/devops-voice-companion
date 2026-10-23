@@ -51,8 +51,17 @@ three-second connection timeout and a five-second read timeout per request.
 
 ## AI tool routing (backend service)
 
-`BedrockToolRouter.route(AssistantRequest)` sends a transcript and selected repository
-to Nova Lite using Bedrock Converse tool calling. All five approved read-only tools
+`BedrockToolRouter.route(AssistantRequest)` first checks the current message independently
+of history and the selected repository. Common standalone thanks/farewells return a fixed
+acknowledgment, and standalone affection returns the scope message, without calling AWS.
+Other messages pass a forced structured `classify_current_message` decision with only the
+current question: pipeline request, general CI/CD question, social, out of scope, or ambiguous.
+Social/off-topic/ambiguous decisions stop before repository routing. Invalid scope responses
+fail closed. This prevents history alone from turning a thank-you into a repeated investigation;
+model-based scope classification still needs live evaluation.
+
+For a pipeline request it sends the transcript and selected repository to Nova Lite using
+Bedrock Converse tool calling. All five approved read-only tools
 are exposed, alongside internal `clarify_request` and `explain_pipeline` decisions that
 are never dispatched to MCP. The result is an `AssistantResponse` containing either one validated tool
 call or a controlled clarification/general explanation with no calls. The router does not execute MCP
@@ -69,16 +78,18 @@ turn: a fixed clarification is returned instead. This prevents internal planning
 unverified build claims from becoming a displayed/spoken routing response.
 Each AWS request has a 30-second overall timeout and a 15-second attempt timeout.
 
-General CI/CD questions use a second, isolated Bedrock call with only the current question,
+General CI/CD questions use an isolated Bedrock call after scope checking with only the current question,
 not the repository or conversational history. It must return a structured user-facing
 explanation or classify the question as requiring live data/out of scope. Explanations
 are bounded to 2000 characters and rejected if they contain recognized internal planning
 markup. Clarification and off-topic responses are fixed application text, not arbitrary
-model prose. The frontend routing timeout is 70 seconds to accommodate the two-call path.
+model prose. The frontend routing timeout is 100 seconds: normally scope plus routing or
+scope plus explanation, with up to three bounded calls if routing selects an explanation.
 These educational answers are model-generated general guidance, not verified repository findings.
 
 `POST /api/assistant/route` exposes this plan to the browser. Both typed and spoken
-questions use it; phrase matching has been removed. The browser validates the plan again
+questions use it; repository tool selection is AI-driven rather than phrase-matched.
+The standalone social-response fast path does not select repository tools. The browser validates the plan again
 and executes it on the existing MCP session. When a failure tool omits `runId`, the
 browser calls `get_failed_runs` with limit 1, extracts the first returned ID, and only then
 executes the requested tool. No failed runs or a GitHub error returns directly without
