@@ -1,16 +1,21 @@
-name: Failure log demo
+name: Failure investigation demo
+run-name: Intentional payment test failure for the live demo
 
 on:
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   demo-failure:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
+      - name: Check out demo source
+        uses: actions/checkout@v7
+
       - name: Run demo tests
+        working-directory: demos/payment_failure
         run: |
-          echo "PaymentServiceTest failed."
-          echo "Expected payment total: 100. Actual payment total: 90."
-          exit 1
+          python3 -m unittest -v test_payment_service
