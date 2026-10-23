@@ -18,6 +18,12 @@ npm run lint
 
 ## Voice build status
 
+For a protected backend, paste its private server bearer token into the masked **Auth token**
+field on the Connect screen. Obtain it from the server operator; do not enter your GitHub
+token or AWS credentials. It is not a Vercel environment variable and is kept in memory only.
+After a refresh or page close, reconnect with the same token. See the root README's
+[connection and demo instructions](../README.md#connecting-to-a-protected-server).
+
 1. Connect to the running MCP server and select **Start talking**.
 2. Enter a repository in `owner/repository` format.
 3. Select the microphone (or press Space outside form controls) and allow microphone access.

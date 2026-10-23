@@ -54,6 +54,36 @@ routing and remains useful as a fallback.
 Try: “Is the build green?”, “What failed recently?”, “Why did the latest build fail?”,
 then “Show the logs for that failure.” Missing or inaccessible logs remain a stated limitation.
 
+## Connecting to a protected server
+
+The website can be public while its MCP backend requires a private **server bearer token**.
+If you are using someone else's server, request access from its operator or self-host
+your own backend. Your GitHub token and AWS credentials are not substitutes for this token.
+
+For your own deployment:
+
+1. Generate a token locally, before recording or screen sharing:
+   ```bash
+   openssl rand -hex 32
+   ```
+   This prints a random value; it does **not** configure Railway automatically.
+2. Copy that value into the backend's Railway variable `APP_AUTH_TOKEN`, save, and redeploy.
+3. Open the frontend, enter the server's `/mcp` URL, and paste the **same value** into
+   the masked **Auth token** field. Connect and select **Start talking**.
+
+Do not put this token in Vercel environment variables, `VITE_*` variables, source code,
+Git commits, screenshots, or public documentation. Vercel only needs the public server
+URL in `VITE_MCP_SERVER_URL`. Keep the token privately so you can reconnect later.
+
+### Preparing a recorded demo
+
+Connect and confirm tool discovery **before starting the recording**, then begin the
+demo on the voice screen. You do not need to type or reveal a token during the demo.
+The app saves only the server URL; the token remains in browser memory and is not
+displayed on the voice screen. Refreshing or closing the page requires reconnecting
+with the same token. A new token is only needed if you choose to rotate or replace it;
+update Railway and reconnect clients when doing so.
+
 ## Deploy and verify
 
 Follow [the Railway + Vercel deployment checklist](docs/deployment.md). Keep GitHub
