@@ -2,15 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import Logo from '../../components/Logo'
 import type { McpConnection } from '../../lib/mcpClient'
 import { useBrowserSpeech } from './useBrowserSpeech'
-import { isBuildStatusQuestion } from './voiceCommands'
 import VoiceSettings from './VoiceSettings'
+import { askAssistant } from '../../lib/assistantClient'
+import type { AssistantTurn, ToolActivity } from '../../lib/assistantClient'
 
 type VoiceScreenProps = {
   connection: McpConnection
   onBack: () => void
+  onHelp: () => void
 }
 
-export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
+export default function VoiceScreen({ connection, onBack, onHelp }: VoiceScreenProps) {
   const [repository, setRepository] = useState('')
   const [repositoryError, setRepositoryError] = useState('')
   const [isChecking, setIsChecking] = useState(false)
@@ -18,20 +20,19 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
   const [response, setResponse] = useState<{ text: string; receivedAt: string } | null>(null)
   const [checkedRepository, setCheckedRepository] = useState('')
   const [spokenQuestion, setSpokenQuestion] = useState('')
+  const [question, setQuestion] = useState('')
+  const [history, setHistory] = useState<AssistantTurn[]>([])
+  const [runId, setRunId] = useState<number | null>(null)
+  const [activities, setActivities] = useState<ToolActivity[]>([])
+  const [isRawLogs, setIsRawLogs] = useState(false)
   const [heardTranscript, setHeardTranscript] = useState('')
-  const [commandError, setCommandError] = useState('')
   const requestRef = useRef<AbortController | null>(null)
   const hostname = new URL(connection.serverUrl).host
   const canCheckBuild = connection.tools.some((tool) => tool.name === 'get_build_status')
   const speech = useBrowserSpeech((transcript) => {
     setHeardTranscript(transcript)
 
-    if (!isBuildStatusQuestion(transcript)) {
-      setCommandError('For now, ask “How’s the build?” or “Check the latest build.” Other voice commands are coming next.')
-      return
-    }
-
-    void handleCheckBuild(transcript)
+    void handleQuestion(transcript, true)
   })
   const voiceState = isChecking ? 'Thinking' : speech.isListening ? 'Listening' : speech.isSpeaking ? 'Speaking' : 'Idle'
 
@@ -52,49 +53,50 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
     return { owner: match[1], repo: match[2], name: repositoryName }
   }
 
-  async function handleCheckBuild(question = '') {
-    if (requestRef.current || !canCheckBuild) return
+  async function handleQuestion(message: string, speakAnswer = false, directStatus = false) {
+    if (requestRef.current || !message.trim()) return
+    if (message.length > 2000) {
+      setRequestError('Please keep your question under 2000 characters.')
+      return
+    }
 
     const target = validateRepository()
     if (!target) return
 
     speech.stopSpeaking()
-    setCommandError('')
     setRequestError('')
     setResponse(null)
     setCheckedRepository(target.name)
-    setSpokenQuestion(question)
+    setSpokenQuestion(message)
+    setQuestion('')
+    setActivities([])
+    setIsRawLogs(false)
     setIsChecking(true)
 
     const controller = new AbortController()
     requestRef.current = controller
 
     try {
-      const result = await connection.client.callTool(
-        {
-          name: 'get_build_status',
-          arguments: { owner: target.owner, repo: target.repo },
-        },
-        { signal: controller.signal },
-      )
+      const answer = await askAssistant(connection, target.name, message, history, runId,
+        controller.signal, (activity) => {
+          if (!controller.signal.aborted) {
+            setActivities((previous) => [...previous.filter((item) => item.name !== activity.name), activity])
+          }
+        }, directStatus)
 
       if (controller.signal.aborted) return
 
-      const text = result.content
-        .filter((content) => content.type === 'text')
-        .map((content) => content.text)
-        .join('\n')
-        .trim()
-
-      if (result.isError || !text) {
-        setRequestError(text || 'The server returned no readable build status. Please try again.')
-      } else {
-        setResponse({ text, receivedAt: new Date().toISOString() })
-        if (question) speech.speak(text)
-      }
-    } catch {
+      setResponse({ text: answer.text, receivedAt: new Date().toISOString() })
+      setIsRawLogs(answer.rawLogs)
+      setRunId(answer.runId)
+      setHistory((previous) => [...previous, { role: 'user' as const, text: message },
+        { role: 'assistant' as const, text: answer.text }].slice(-6))
+      if (speakAnswer) speech.speak(answer.rawLogs
+        ? 'The failure logs are shown in Conversation. Ask me to summarize that failure for a spoken explanation.'
+        : answer.text)
+    } catch (error) {
       if (!controller.signal.aborted) {
-        setRequestError('Could not retrieve build status. Check your connection and try again.')
+        setRequestError(error instanceof Error ? error.message : 'Could not complete your request. Check your connection and try again.')
       }
     } finally {
       if (!controller.signal.aborted) {
@@ -116,9 +118,8 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
       speech.stopListening()
       return
     }
-    if (!canCheckBuild || !validateRepository()) return
+    if (!validateRepository()) return
 
-    setCommandError('')
     setHeardTranscript('')
     speech.startListening()
   }
@@ -160,6 +161,12 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
           </div>
           <button
             type="button"
+            onClick={onHelp}
+            aria-label="Open help guide"
+            className="size-11 rounded-full border border-border text-muted hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-primary"
+          >?</button>
+          <button
+            type="button"
             onClick={onBack}
             className="min-h-11 rounded-full border border-border px-4 text-xs text-muted transition-colors duration-200 hover:border-border-strong hover:bg-surface-hover hover:text-foreground active:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
           >
@@ -193,7 +200,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
             noValidate
             onSubmit={(event) => {
               event.preventDefault()
-              void handleCheckBuild()
+              void handleQuestion('What is the latest build status?', false, true)
             }}
           >
             <label htmlFor="repository" className="block text-sm font-medium">
@@ -204,7 +211,11 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               type="text"
               value={repository}
               disabled={isChecking || speech.isListening}
-              onChange={(event) => setRepository(event.target.value)}
+              onChange={(event) => {
+                setRepository(event.target.value)
+                setHistory([])
+                setRunId(null)
+              }}
               aria-invalid={Boolean(repositoryError)}
               aria-describedby={repositoryError ? 'repository-error' : undefined}
               placeholder="owner/repository"
@@ -252,7 +263,7 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               <button
                 type="button"
                 onClick={handleVoiceControl}
-                disabled={isChecking || (!speech.isSpeaking && (!speech.supportsRecognition || !canCheckBuild))}
+                disabled={isChecking || (!speech.isSpeaking && !speech.supportsRecognition)}
                 aria-label={speech.isSpeaking ? 'Stop speaking' : speech.isListening ? 'Stop listening' : 'Start listening'}
                 aria-pressed={speech.isListening || speech.isSpeaking}
                 className={`relative flex size-24 items-center justify-center rounded-full border shadow-xl transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${isChecking ? 'border-thinking/30 bg-thinking/10 text-thinking' : speech.isListening || speech.isSpeaking ? 'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 active:bg-primary/30' : 'border-border-strong bg-raised text-muted hover:border-primary/40 hover:text-primary active:bg-surface-hover'}`}
@@ -272,16 +283,16 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               </button>
             </div>
             <h3 className="mt-5 text-lg font-medium">
-              {isChecking ? 'Checking build status…' : speech.isListening ? 'Listening…' : speech.isSpeaking ? 'Speaking — tap to interrupt' : speech.supportsRecognition ? 'Tap to talk' : 'Use Check build status'}
+              {isChecking ? activities.at(-1)?.name ?? 'Choosing the right tool…' : speech.isListening ? 'Listening…' : speech.isSpeaking ? 'Speaking — tap to interrupt' : speech.supportsRecognition ? 'Tap to talk' : 'Type a question'}
             </h3>
             <p className="mt-2 max-w-64 text-sm leading-relaxed text-muted">
-              {speech.isListening ? 'Ask “How’s the build?” Tap again to cancel.' : speech.isSpeaking ? 'Reading the answer from your MCP server.' : speech.supportsRecognition ? 'Ask “How’s the build?” · or press Space' : 'Speech recognition is unavailable in this browser. The button above still works.'}
+              {speech.isListening ? 'Ask about your builds or failures. Tap again to cancel.' : speech.isSpeaking ? 'Reading the answer from your MCP server.' : speech.supportsRecognition ? 'Ask naturally · or press Space' : 'Speech recognition is unavailable. Use the text field in Conversation.'}
             </p>
             {heardTranscript && (
               <p role="status" className="mt-3 max-w-72 text-xs text-steel">Heard: “{heardTranscript}”</p>
             )}
-            {(speech.speechError || commandError) && (
-              <p role="alert" className="mt-3 max-w-72 text-sm text-failure">{commandError || speech.speechError}</p>
+            {speech.speechError && (
+              <p role="alert" className="mt-3 max-w-72 text-sm text-failure">{speech.speechError}</p>
             )}
           </div>
 
@@ -307,22 +318,26 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
                 <p className="mt-1 break-all font-mono text-sm text-primary-light">{checkedRepository}</p>
               </div>
               <div className="rounded-2xl border border-border bg-inset p-5" aria-busy={isChecking}>
-                <p className={`font-mono text-xs ${isChecking ? 'text-thinking' : 'text-steel'}`}>
-                  get_build_status · {isChecking ? 'running' : requestError ? 'error' : 'complete'}
-                </p>
+                <ul aria-label="Tool activity" className="space-y-2 font-mono text-xs">
+                  {activities.map((activity) => (
+                    <li key={activity.name} className={activity.state === 'running' ? 'text-thinking' : activity.state === 'error' ? 'text-failure' : 'text-primary-light'}>
+                      {activity.name} · {activity.state}
+                    </li>
+                  ))}
+                </ul>
                 {isChecking && (
-                  <p role="status" className="mt-3 text-sm text-muted">Checking GitHub Actions…</p>
+                  <p role="status" className="mt-3 text-sm text-muted">{activities.length ? 'Checking GitHub evidence…' : 'Bedrock is choosing the right tool…'}</p>
                 )}
                 {requestError && (
                   <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-failure">{requestError}</p>
                 )}
                 {response && (
                   <div role="status">
-                    <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed">{response.text}</p>
+                    <p className={`mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed ${isRawLogs ? 'font-mono text-xs' : ''}`}>{response.text}</p>
                     <time dateTime={response.receivedAt} className="mt-4 block font-mono text-xs text-muted tabular-nums">
                       {new Date(response.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </time>
-                    {speech.supportsSynthesis && (
+                    {speech.supportsSynthesis && !isRawLogs && (
                       <button
                         type="button"
                         disabled={speech.isListening || isChecking}
@@ -344,10 +359,33 @@ export default function VoiceScreen({ connection, onBack }: VoiceScreenProps) {
               Build status, failed runs, and useful explanations—all in one conversation.
             </p>
             <p className="mt-6 max-w-72 text-xs leading-relaxed text-steel">
-              Enter a repository, then ask “How’s the build?” or select Check build status.
+              Enter a repository, then speak or type a question.
             </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              {["How’s the build?", 'What failed recently?', 'Why did the latest build fail?'].map((prompt) => (
+                <button type="button" key={prompt} disabled={isChecking || speech.isListening}
+                  onClick={() => void handleQuestion(prompt)}
+                  className="min-h-11 rounded-full border border-border px-4 py-2 text-xs text-primary-light hover:bg-surface-hover active:bg-raised focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40">
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </div>
           )}
+          <form className="shrink-0 border-t border-border p-4" onSubmit={(event) => {
+            event.preventDefault()
+            void handleQuestion(question)
+          }}>
+            <label htmlFor="question" className="sr-only">Ask about builds or failures</label>
+            <div className="flex gap-2">
+              <input id="question" value={question} maxLength={2000}
+                disabled={isChecking || speech.isListening}
+                onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about builds or failures…"
+                className="min-w-0 flex-1 rounded-xl border border-border bg-inset px-3 py-3 text-sm focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40" />
+              <button type="submit" disabled={!question.trim() || isChecking || speech.isListening}
+                className="rounded-full bg-primary px-5 text-sm font-semibold text-page hover:bg-primary-light active:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40">Ask</button>
+            </div>
+          </form>
         </section>
       </main>
 

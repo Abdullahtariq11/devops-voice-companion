@@ -7,10 +7,18 @@ type SetupScreenProps = {
     connection: McpConnection | null
     onConnected: (connection: McpConnection) => void
     onStart: () => void
+    onDisconnect: () => void
 }
 
-function SetupScreen({ connection, onConnected, onStart }: SetupScreenProps) {
-    const [serverUrl, setServerUrl] = useState(connection?.serverUrl ?? '');
+function SetupScreen({ connection, onConnected, onStart, onDisconnect }: SetupScreenProps) {
+    const [serverUrl, setServerUrl] = useState(() => {
+        if (connection) return connection.serverUrl
+        try {
+            return localStorage.getItem('failwhisperer.serverUrl') || import.meta.env.VITE_MCP_SERVER_URL || ''
+        } catch {
+            return import.meta.env.VITE_MCP_SERVER_URL || ''
+        }
+    });
     const [authToken, setAuthToken] = useState('')
     const [error, setError] = useState('');
     const [isConnecting, setIsConnecting] = useState(false)
@@ -63,6 +71,11 @@ function SetupScreen({ connection, onConnected, onStart }: SetupScreenProps) {
             }
 
             onConnected(result)
+            try {
+                localStorage.setItem('failwhisperer.serverUrl', result.serverUrl)
+            } catch {
+                setError('Connected, but this browser could not save the server URL.')
+            }
         } catch {
             if (isMounted.current) {
                 setError("Couldn't connect to that MCP server — check the URL and try again")
@@ -188,6 +201,15 @@ function SetupScreen({ connection, onConnected, onStart }: SetupScreenProps) {
                             Start talking
                         </button>
                     )}
+                    {connection && (
+                        <button type="button" onClick={onDisconnect}
+                            className="min-h-11 w-full rounded-full border border-border px-4 text-sm text-muted hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-primary">
+                            Disconnect / change server
+                        </button>
+                    )}
+                    <p className="text-center text-xs leading-relaxed text-muted">
+                        Server URL saved locally. Tokens stay in memory only.
+                    </p>
                 </form>
             </section>
         </main>

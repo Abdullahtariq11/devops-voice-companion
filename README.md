@@ -1,42 +1,82 @@
-# DevOps Voice Companion
+# FailWhisperer
 
-Ask Alexa about your builds. Get answers, not log dumps.
+Talk to your delivery pipeline. Ask about GitHub Actions builds, inspect failed runs,
+and hear an evidence-based explanation of what broke.
 
-## What it is
-
-A voice-driven MCP (Model Context Protocol) server that reports CI/build status and summarizes failures in plain, speakable language. Built for Amazon's **Build, Ship, Shape** Developer Hackathon — Alexa+ track + AWS Builder mini-challenge.
-
-> "Alexa, why did the build fail?"
-> → checks your GitHub Actions runs → Amazon Bedrock summarizes the failure → Alexa+ speaks the answer.
+An independent web voice client and self-hosted MCP server for the Amazon Developer
+Hackathon. This demonstrates an Alexa+-style experience; it is **not an official Alexa
+integration** and does not require an Echo or Alexa+ preview access.
 
 ## How it works
 
+```text
+Browser speech or typed question
+  → Spring Boot AI routing API → Amazon Bedrock Nova Lite selects an approved tool
+  → browser MCP client → Streamable HTTP MCP server → GitHub Actions
+  → failure summaries use Bedrock with bounded GitHub evidence
+  → visible response and optional browser speech playback
 ```
-Voice (Alexa+) → MCP tools (Spring Boot) → GitHub Actions API (build status, logs)
-                                           → Amazon Bedrock (failure summaries)
-```
+
+Actual tool calls use MCP, not a simulated timer. For latest-failure explanations,
+the client resolves the latest failed run before calling `summarize_failure`.
+Follow-up questions carry bounded conversation context and the previous run ID.
+The AI cannot deploy, rerun builds, or modify repositories. A failed assertion does
+not establish a deeper root cause; summaries distinguish observations from uncertainty.
 
 ## Stack
 
-- Java 21, Spring Boot, Spring AI (MCP server over Streamable HTTP)
-- Amazon Bedrock (failure summarization)
-- GitHub Actions API (build status and logs)
-- Docker, Railway (hosting)
+- `server/`: Java 25, Spring Boot, Spring AI MCP, AWS SDK for Bedrock.
+- `frontend/`: React, TypeScript, Vite, Tailwind, official MCP TypeScript client.
+- GitHub Actions for CI; Railway backend; Vercel frontend.
 
-## Roadmap
+## Run locally
 
-- [x] Repo + plan
-- [x] Phase 0: Scaffold, hello-world MCP tool, Railway deploy
-- [ ] Phase 1: GitHub Actions tools (build status, failed runs, logs)
-- [ ] Phase 2: Bedrock failure summarization
-- [ ] Phase 3: Alexa+ integration via Alexa+ for Builders
-- [ ] Phase 4: Demo video + submission
+Start the backend from `server/` with `GITHUB_TOKEN` already set in your shell:
 
-## Status
+```bash
+AWS_PROFILE=your-profile AWS_REGION=us-east-2 ./mvnw spring-boot:run
+```
 
-In active development. Hackathon deadline: October 23, 2026.
+In another terminal:
 
-Implemented MCP tools: `get_build_status`, `get_failed_runs`, `get_failure_logs`,
-and `summarize_failure`.
-See the [implementation summary](docs/implementation.md) for data flow, limits,
-error handling, testing instructions, and remaining work.
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Connect to `http://localhost:8080/mcp` from `http://localhost:5173`. Local HTTP is
+accepted only in a frontend development build. Leave the server auth token blank
+unless `APP_AUTH_TOKEN` is configured. Enter an accessible `owner/repository`, then
+ask by microphone or text. The separate Check build status button works without AI
+routing and remains useful as a fallback.
+
+Try: “Is the build green?”, “What failed recently?”, “Why did the latest build fail?”,
+then “Show the logs for that failure.” Missing or inaccessible logs remain a stated limitation.
+
+## Deploy and verify
+
+Follow [the Railway + Vercel deployment checklist](docs/deployment.md). Keep GitHub
+and AWS credentials on the backend. Never put secrets in `VITE_*` environment variables.
+The app saves only the server URL locally; the server bearer token stays in memory.
+
+```bash
+cd server
+RUN_BEDROCK_TESTS=false ./mvnw test
+cd ../frontend
+npm run build
+```
+
+The default tests mock AWS and GitHub; live Bedrock testing is opt-in and billable.
+See [implementation details](docs/implementation.md) and [frontend usage](frontend/README.md).
+
+## Privacy and limitations
+
+Browser speech recognition may use an online provider and is not supported everywhere.
+Typed questions remain available. Questions, bounded recent conversation, and GitHub
+failure evidence may be processed by Bedrock. Speech playback depends on installed
+browser/device voices; Google UK English Female at 0.90× is preferred when available.
+
+The bearer token is a shared demo access control, not multi-user authentication or
+per-user GitHub authorization. API concurrency is bounded per server instance; configure
+AWS budgets/monitoring and stronger rate limiting before opening access broadly.

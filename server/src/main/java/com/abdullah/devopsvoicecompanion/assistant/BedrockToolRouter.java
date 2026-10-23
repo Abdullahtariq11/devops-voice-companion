@@ -136,7 +136,7 @@ public class BedrockToolRouter {
     var calls = content.stream().map(ContentBlock::toolUse).filter(Objects::nonNull).toList();
 
     if (response.stopReason() == StopReason.TOOL_USE) {
-      if (calls.size() != 1 || !Set.of("get_build_status", "get_failed_runs",
+      if (calls.size() != 1 || calls.getFirst().name() == null || !Set.of("get_build_status", "get_failed_runs",
           "get_failure_logs", "summarize_failure").contains(calls.getFirst().name())) {
         throw new IllegalStateException("Bedrock requested an unsupported tool selection.");
       }

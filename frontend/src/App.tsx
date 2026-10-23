@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import SetupScreen from './features/connection/SetupScreen'
 import VoiceScreen from './features/voice/VoiceScreen'
+import GuideScreen from './features/guide/GuideScreen'
 import type { McpConnection } from './lib/mcpClient'
 
 function App() {
   const [connection, setConnection] = useState<McpConnection | null>(null)
   const connectionRef = useRef<McpConnection | null>(null)
-  const [screen, setScreen] = useState<'setup' | 'voice'>('setup')
+  const [screen, setScreen] = useState<'setup' | 'voice' | 'guide'>('setup')
 
   useEffect(() => {
     return () => {
@@ -25,11 +26,16 @@ function App() {
     setConnection(result)
   }
 
+  if (screen === 'guide') {
+    return <GuideScreen onBack={() => setScreen(connection ? 'voice' : 'setup')} />
+  }
+
   if (screen === 'voice' && connection) {
     return (
       <VoiceScreen
         connection={connection}
         onBack={() => setScreen('setup')}
+        onHelp={() => setScreen('guide')}
       />
     )
   }
@@ -39,6 +45,11 @@ function App() {
       connection={connection}
       onConnected={handleConnected}
       onStart={() => setScreen('voice')}
+      onDisconnect={() => {
+        if (connectionRef.current) void connectionRef.current.client.close().catch(() => undefined)
+        connectionRef.current = null
+        setConnection(null)
+      }}
     />
   )
 }

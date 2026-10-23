@@ -36,7 +36,10 @@ export async function connectToMcpServer(
 
     const { tools } = await client.listTools()
 
-    return { client, tools, serverUrl: new URL(serverUrl.trim()).href }
+    return {
+      client, tools, serverUrl: new URL(serverUrl.trim()).href,
+      getAssistantHeaders: () => new Headers(headers),
+    }
   } catch (error) {
     await client.close().catch(() => undefined)
     throw error
