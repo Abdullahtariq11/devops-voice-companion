@@ -19,6 +19,14 @@ Use an IAM identity, not AWS root credentials. Production startup refuses an emp
 Health checks at `/actuator/health` remain unauthenticated. Set Railway's healthcheck
 path to `/actuator/health` and leave its platform-provided `PORT` unchanged.
 
+Generate `APP_AUTH_TOKEN` locally with `openssl rand -hex 32`. The command only prints
+the value: copy it into Railway yourself, then use the same value in the frontend's
+masked **Auth token** field. Never put it in Vercel or a public `VITE_*` variable.
+Retain it privately for reconnecting; visitors need authorized access from the operator
+or their own self-hosted backend. Connect before recording a demo and start the video
+on the voice screen. Refreshing the page clears the in-memory token, so reconnect if
+you refresh; generating a different token is not required unless you are rotating it.
+
 `FRONTEND_ORIGINS` is a comma-separated list of exact origins with no paths or trailing
 slashes. Do not use `*` or a wildcard covering arbitrary Vercel previews. Add a specific
 preview URL explicitly only when needed. CORS is not a substitute for authentication.
