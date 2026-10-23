@@ -55,7 +55,7 @@ async function chooseTool(connection: McpConnection, repository: string, questio
   headers.set('Accept', 'application/json')
   const response = await fetch(new URL('/api/assistant/route', connection.serverUrl), {
     method: 'POST', headers, credentials: 'omit', redirect: 'error',
-    signal: AbortSignal.any([signal, AbortSignal.timeout(40000)]),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(70000)]),
     body: JSON.stringify({ message: question, repository, runId,
       history: history.slice(-6).map((turn) => ({ ...turn, text: turn.text.slice(0, 4000) })) }),
   })
