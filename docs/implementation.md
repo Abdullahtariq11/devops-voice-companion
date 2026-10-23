@@ -48,6 +48,32 @@ three-second connection timeout and a five-second read timeout per request.
   Input limits are checked before making requests.
 - Failure-detail output is analysis material, not text intended to be spoken verbatim.
 
+## AI tool routing (backend service)
+
+`BedrockToolRouter.route(AssistantRequest)` sends a transcript and selected repository
+to Nova Lite using Bedrock Converse tool calling. Initially, only `get_build_status`
+is exposed. The result is an `AssistantResponse` containing either one validated tool
+call or a conversational clarification with no calls. The router does not execute MCP
+tools, retrieve GitHub data, or report a build result itself.
+
+Messages are limited to 2000 characters. Repository names are validated before calling
+AWS. Tool responses must name the approved tool and supply exactly `owner` and `repo`
+for the selected repository; unknown tools, extra arguments, cross-repository calls,
+multiple calls, and truncated or empty responses are rejected. Model text alongside a
+tool request is discarded rather than treated as verified build evidence. Requests have
+a 30-second overall timeout and a 15-second attempt timeout.
+
+The routing service is not yet exposed as an HTTP endpoint or connected to frontend
+speech input. The existing frontend command matching remains in use until that wiring
+is implemented. Clarification wording and relevance are model-generated, not guaranteed.
+
+Run its mocked tests without making live AWS calls:
+
+```bash
+cd server
+./mvnw -Dtest=BedrockToolRouterTests test
+```
+
 ## Local verification
 
 Run the server from `server` using an AWS profile with Bedrock invocation access:

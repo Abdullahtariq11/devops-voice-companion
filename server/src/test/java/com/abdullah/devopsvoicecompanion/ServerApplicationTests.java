@@ -1,6 +1,7 @@
 package com.abdullah.devopsvoicecompanion;
 
 import com.abdullah.devopsvoicecompanion.bedrock.BedrockSummarizer;
+import com.abdullah.devopsvoicecompanion.assistant.BedrockToolRouter;
 import com.abdullah.devopsvoicecompanion.github.GitHubClient;
 import com.abdullah.devopsvoicecompanion.github.GitHubJob;
 import com.abdullah.devopsvoicecompanion.github.GitHubRun;
@@ -37,6 +38,9 @@ class ServerApplicationTests {
 
   @MockitoBean
   private BedrockSummarizer summarizer;
+
+  @MockitoBean
+  private BedrockToolRouter toolRouter;
 
   private McpSyncClient client;
 

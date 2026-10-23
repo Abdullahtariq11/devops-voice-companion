@@ -1,21 +1,76 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Logo from '../../components/Logo'
+import { connectToMcpServer } from '../../lib/mcpClient'
+import type { McpConnection } from '../../lib/mcpClient'
 
-function SetupScreen() {
-    const [serverUrl, setServerUrl] = useState('');
+type SetupScreenProps = {
+    connection: McpConnection | null
+    onConnected: (connection: McpConnection) => void
+    onStart: () => void
+}
+
+function SetupScreen({ connection, onConnected, onStart }: SetupScreenProps) {
+    const [serverUrl, setServerUrl] = useState(connection?.serverUrl ?? '');
+    const [authToken, setAuthToken] = useState('')
     const [error, setError] = useState('');
+    const [isConnecting, setIsConnecting] = useState(false)
+    const isMounted = useRef(false)
+
+    useEffect(() => {
+        isMounted.current = true
+
+        return () => {
+            isMounted.current = false
+        }
+    }, [])
 
     function validateServerUrl() {
         try {
             const url = new URL(serverUrl.trim())
 
-            if (url.protocol !== 'https:' || url.username || url.password) {
+            const isLocalDevelopment =
+                import.meta.env.DEV &&
+                url.protocol === 'http:' &&
+                ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+
+            if (
+                (url.protocol !== 'https:' && !isLocalDevelopment) ||
+                url.username ||
+                url.password
+            ) {
                 throw new Error('Invalid server URL')
             }
 
             setError('')
+            return true
         } catch {
             setError("Couldn't reach that server — check the URL and try again")
+            return false
+        }
+    }
+
+    async function handleConnect() {
+        if (isConnecting || connection || !validateServerUrl()) return
+
+        setIsConnecting(true)
+
+        try {
+            const result = await connectToMcpServer(serverUrl, authToken)
+
+            if (!isMounted.current) {
+                await result.client.close().catch(() => undefined)
+                return
+            }
+
+            onConnected(result)
+        } catch {
+            if (isMounted.current) {
+                setError("Couldn't connect to that MCP server — check the URL and try again")
+            }
+        } finally {
+            if (isMounted.current) {
+                setIsConnecting(false)
+            }
         }
     }
 
@@ -52,7 +107,7 @@ function SetupScreen() {
                     noValidate
                     onSubmit={(event) => {
                         event.preventDefault()
-                        validateServerUrl()
+                        void handleConnect()
                     }}
                 >
                     <div className="space-y-2">
@@ -64,6 +119,7 @@ function SetupScreen() {
                             name="serverUrl"
                             type="url"
                             value={serverUrl}
+                            disabled={isConnecting || Boolean(connection)}
                             onChange={(event) => setServerUrl(event.target.value)}
                             aria-invalid={Boolean(error)}
                             aria-describedby={error ? 'connection-error' : undefined}
@@ -86,6 +142,9 @@ function SetupScreen() {
                             id="auth-token"
                             name="authToken"
                             type="password"
+                            value={authToken}
+                            disabled={isConnecting || Boolean(connection)}
+                            onChange={(event) => setAuthToken(event.target.value)}
                             autoComplete="off"
                             placeholder="Bearer token"
                             className="w-full rounded-xl border border-border bg-inset px-4 py-3 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
@@ -94,11 +153,41 @@ function SetupScreen() {
 
                     <button
                         type="submit"
-                        disabled={!serverUrl.trim()}
+                        disabled={!serverUrl.trim() || isConnecting || Boolean(connection)}
                         className="w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                        Connect to server
+                        {isConnecting
+                            ? 'Discovering tools…'
+                            : connection
+                                ? 'Server connected'
+                                : 'Connect to server'}
                     </button>
+                    <p role="status" className="text-sm text-primary">
+                        {isConnecting
+                            ? 'Discovering tools…'
+                            : connection && `${connection.tools.length} tools found and ready to use`}
+                    </p>
+                    {connection && (
+                        <ul aria-label="Discovered tools" className="flex flex-wrap gap-2">
+                            {connection.tools.map((tool) => (
+                                <li
+                                    key={tool.name}
+                                    className="max-w-full rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5 font-mono text-xs break-all text-primary-light"
+                                >
+                                    {tool.name}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {connection && (
+                        <button
+                            type="button"
+                            onClick={onStart}
+                            className="w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-page transition-colors duration-200 hover:bg-primary-light active:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-reduce:transition-none"
+                        >
+                            Start talking
+                        </button>
+                    )}
                 </form>
             </section>
         </main>
