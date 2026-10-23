@@ -31,12 +31,65 @@ class BuildToolsTests {
   private GitHubClient github;
   private BedrockSummarizer summarizer;
   private BuildTools tools;
+  private com.abdullah.devopsvoicecompanion.bedrock.BedrockFailureInvestigator investigator;
 
   @BeforeEach
   void setUp() {
     github = mock(GitHubClient.class, withSettings().mockMaker(MockMakers.SUBCLASS));
     summarizer = mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS));
-    tools = new BuildTools(github, summarizer);
+    investigator = mock(com.abdullah.devopsvoicecompanion.bedrock.BedrockFailureInvestigator.class);
+    tools = new BuildTools(github, summarizer, investigator);
+  }
+
+  @Test
+  void investigatesWithLongerLogsAndPinnedSourceEvidence() {
+    when(github.getInvestigationJobs("owner", "repo", 42)).thenReturn(List.of(
+        new GitHubJob(123L, "Tests", "completed", "failure", List.of()),
+        new GitHubJob(456L, "Other", "completed", "failure", List.of())));
+    when(github.getJobLogs("owner", "repo", 123, 6000)).thenReturn("Expected 100, actual 90");
+    when(github.getRunSourceEvidence(eq("owner"), eq("repo"), eq(42L), anyString()))
+        .thenReturn("File: PaymentService.java at immutable SHA");
+    when(investigator.investigate(anyString())).thenReturn("Observed mismatch. Cause not confirmed.");
+
+    String result = tools.investigateFailure("owner", "repo", 42);
+
+    assertTrue(result.contains("Cause not confirmed"));
+    assertTrue(result.contains("first 100"));
+    verify(investigator).investigate(argThat(text -> text.contains("Expected 100, actual 90")
+        && text.contains("PaymentService.java") && text.length() <= 30000));
+    verify(github, never()).getJobLogs(eq("owner"), eq("repo"), eq(456L), anyInt());
+    verifyNoInteractions(summarizer);
+  }
+
+  @Test
+  void investigatesPartialEvidenceWhenSourceAccessFails() {
+    when(github.getInvestigationJobs("owner", "repo", 42)).thenReturn(List.of(
+        new GitHubJob(null, "Tests", "completed", "failure", List.of())));
+    when(github.getRunSourceEvidence(anyString(), anyString(), anyLong(), anyString()))
+        .thenThrow(new RestClientException("private upstream error"));
+    when(investigator.investigate(anyString())).thenReturn("Cause undetermined.");
+    assertTrue(tools.investigateFailure("owner", "repo", 42).contains("Cause undetermined"));
+    verify(investigator).investigate(argThat(text -> text.contains("Contents read permission")
+        && text.contains("missing job ID") && !text.contains("private upstream error")));
+  }
+
+  @Test
+  void emptyOrInvalidInvestigationBypassesAwsAndSource() {
+    assertTrue(tools.investigateFailure("owner", "repo", -1).contains("positive"));
+    assertTrue(tools.investigateFailure("owner", "repo", 42).contains("No failed jobs"));
+    assertTrue(tools.investigateFailure("../owner", "repo", 42).contains("valid GitHub"));
+    verifyNoInteractions(investigator);
+    verify(github, never()).getRunSourceEvidence(anyString(), anyString(), anyLong(), anyString());
+  }
+
+  @Test
+  void investigationSanitizesUnsafeModelReports() {
+    when(github.getInvestigationJobs("owner", "repo", 42)).thenReturn(List.of(
+        new GitHubJob(null, "Tests", "completed", "failure", List.of())));
+    when(github.getRunSourceEvidence(anyString(), anyString(), anyLong(), anyString())).thenReturn("Source unavailable.");
+    when(investigator.investigate(anyString())).thenThrow(new IllegalStateException("secret model text"));
+    assertEquals("I collected failure evidence, but couldn't produce a reliable investigation. "
+        + "Try again or ask for the failure logs.", tools.investigateFailure("owner", "repo", 42));
   }
 
   @ParameterizedTest

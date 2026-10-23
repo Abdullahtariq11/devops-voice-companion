@@ -6,7 +6,7 @@ type ToolCall = { name: string; arguments: Record<string, unknown> }
 type Decision = { message: string; toolCalls: ToolCall[] }
 export type AssistantAnswer = { text: string; runId: number | null; rawLogs: boolean }
 
-const approvedTools = new Set(['get_build_status', 'get_failed_runs', 'get_failure_logs', 'summarize_failure'])
+const approvedTools = new Set(['get_build_status', 'get_failed_runs', 'get_failure_logs', 'summarize_failure', 'investigate_failure'])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -34,7 +34,7 @@ function parseDecision(value: unknown, repository: string): Decision {
     }
     const args = call.arguments
     const keys = call.name === 'get_failed_runs' ? ['owner', 'repo', 'limit'] :
-      ['get_failure_logs', 'summarize_failure'].includes(call.name) ? ['owner', 'repo', 'runId'] : ['owner', 'repo']
+      ['get_failure_logs', 'summarize_failure', 'investigate_failure'].includes(call.name) ? ['owner', 'repo', 'runId'] : ['owner', 'repo']
     if (Object.keys(args).some((key) => !keys.includes(key)) ||
         typeof args.owner !== 'string' || args.owner.toLowerCase() !== owner.toLowerCase() ||
         typeof args.repo !== 'string' || args.repo.toLowerCase() !== repo.toLowerCase() ||
@@ -75,7 +75,7 @@ async function invoke(connection: McpConnection, call: ToolCall, signal: AbortSi
   }
   onActivity({ name: call.name, state: 'running' })
   try {
-    const result = await connection.client.callTool(call, { signal, timeout: 60000 })
+    const result = await connection.client.callTool(call, { signal, timeout: call.name === 'investigate_failure' ? 100000 : 60000 })
     const text = result.content.filter((item) => item.type === 'text').map((item) => item.text).join('\n').trim()
     if (result.isError || !text) throw new Error(text || 'The tool returned no readable response.')
     onActivity({ name: call.name, state: 'complete' })
@@ -98,7 +98,7 @@ export async function askAssistant(connection: McpConnection, repository: string
 
   const call = decision.toolCalls[0]
   let runId = validId(call.arguments.runId) ? call.arguments.runId : null
-  if (['get_failure_logs', 'summarize_failure'].includes(call.name) && runId === null) {
+  if (['get_failure_logs', 'summarize_failure', 'investigate_failure'].includes(call.name) && runId === null) {
     const failures = await invoke(connection, { name: 'get_failed_runs', arguments: { owner, repo, limit: 1 } }, signal, onActivity)
     runId = firstFailedRunId(failures)
     if (runId === null) return { text: failures, runId: null, rawLogs: false }

@@ -52,7 +52,7 @@ class BedrockToolRouterTests {
     assertEquals(ConversationRole.USER, message.role());
     assertEquals("Selected repository: owner/repo", message.content().getFirst().text());
     assertEquals("Is everything green?", message.content().getLast().text());
-    assertEquals(6, capturedRequest.toolConfig().tools().size());
+    assertEquals(7, capturedRequest.toolConfig().tools().size());
     assertNotNull(capturedRequest.toolConfig().toolChoice().any());
     var tool = capturedRequest.toolConfig().tools().getFirst().toolSpec();
     assertEquals("get_build_status", tool.name());
@@ -188,6 +188,14 @@ class BedrockToolRouterTests {
     givenResponse(StopReason.TOOL_USE, call("summarize_failure", arguments("owner", "repo")));
     var result = router.route(new AssistantRequest("Why did the latest build fail?", "owner/repo"));
     assertEquals("summarize_failure", result.toolCalls().getFirst().name());
+    assertEquals(Map.of("owner", "owner", "repo", "repo"), result.toolCalls().getFirst().arguments());
+  }
+
+  @Test
+  void selectsReadOnlyInvestigationForLatestFailure() {
+    givenResponse(StopReason.TOOL_USE, call("investigate_failure", arguments("owner", "repo")));
+    var result = router.route(new AssistantRequest("Investigate the latest failure in depth", "owner/repo"));
+    assertEquals("investigate_failure", result.toolCalls().getFirst().name());
     assertEquals(Map.of("owner", "owner", "repo", "repo"), result.toolCalls().getFirst().arguments());
   }
 

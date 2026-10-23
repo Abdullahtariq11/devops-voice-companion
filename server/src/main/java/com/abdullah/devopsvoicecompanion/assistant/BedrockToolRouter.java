@@ -106,7 +106,7 @@ public class BedrockToolRouter {
                             """
                             You route questions for FailWhisperer, a DevOps voice assistant.
                             Select exactly one structured decision tool for the question.
-                            Four tools retrieve real repository evidence. Two are internal decisions:
+                            Five tools retrieve real repository evidence. Two are internal decisions:
                             explain_pipeline for general CI/CD concepts, and clarify_request for
                             ambiguity, unsupported actions, another repository, or unrelated topics.
                             For status/health questions, choose get_build_status.
@@ -118,6 +118,9 @@ public class BedrockToolRouter {
                             Never answer live repository questions from conversation history alone.
                             For raw failure evidence or logs, choose get_failure_logs.
                             For why a build failed or an explanation, choose summarize_failure.
+                            For a deeper investigation, root-cause analysis, source/code inspection,
+                            or a follow-up asking to dig deeper, choose investigate_failure.
+                            This inspects logs and bounded changed source at the run's head commit.
                             Use explain_pipeline only for general knowledge: CI/CD, build stages,
                             deployment strategies, test failures, flaky tests, logs, and pipeline practices.
                             Never use it to assert actual status or causes for the selected repository.
@@ -161,7 +164,7 @@ public class BedrockToolRouter {
 
     if (response.stopReason() == StopReason.TOOL_USE) {
       if (calls.size() != 1 || calls.getFirst().name() == null || !Set.of("get_build_status", "get_failed_runs",
-          "get_failure_logs", "summarize_failure", "clarify_request", "explain_pipeline").contains(calls.getFirst().name())) {
+          "get_failure_logs", "summarize_failure", "investigate_failure", "clarify_request", "explain_pipeline").contains(calls.getFirst().name())) {
         throw new IllegalStateException("Bedrock requested an unsupported tool selection.");
       }
 
@@ -186,7 +189,7 @@ public class BedrockToolRouter {
       }
       var permitted = switch (name) {
         case "get_failed_runs" -> Set.of("owner", "repo", "limit");
-        case "get_failure_logs", "summarize_failure" -> Set.of("owner", "repo", "runId");
+        case "get_failure_logs", "summarize_failure", "investigate_failure" -> Set.of("owner", "repo", "runId");
         default -> Set.of("owner", "repo");
       };
       if (!permitted.containsAll(arguments.keySet())
@@ -333,6 +336,7 @@ public class BedrockToolRouter {
         additionalTool("get_failed_runs", "List recent failed GitHub Actions runs. Limit defaults to 5.", "limit", 5),
         additionalTool("get_failure_logs", "Get raw failed job, step, and log evidence. Not for reading aloud. Omit runId to resolve the latest failed run.", "runId", 9007199254740991L),
         additionalTool("summarize_failure", "Explain why a run failed using logs and Amazon Bedrock. Omit runId to investigate the latest failed run.", "runId", 9007199254740991L),
+        additionalTool("investigate_failure", "Investigate in depth using logs, single head-commit patches and changed source. Read-only, uncertain causes and next checks. Omit runId for latest failure.", "runId", 9007199254740991L),
         clarificationTool(), explanationTool());
   }
 

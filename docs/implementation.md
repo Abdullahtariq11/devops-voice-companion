@@ -8,6 +8,7 @@
 | `get_failed_runs` | `owner`, `repo`, optional `limit` | Recent failed runs with IDs, branches, and relative times. Defaults to five and accepts one to five results. |
 | `get_failure_logs` | `owner`, `repo`, `runId` | Failed or timed-out jobs, failed steps, and bounded log excerpts for a run's latest attempt. |
 | `summarize_failure` | `owner`, `repo`, `runId` | Collects failure evidence and asks Bedrock Nova Lite for a short explanation. Validation errors, GitHub errors, and empty results bypass the model. |
+| `investigate_failure` | `owner`, `repo`, `runId` | Read-only investigation combining longer logs, a single head-commit diff, and up to three changed source excerpts; separates observations, uncertain cause, next check, and limitations. |
 
 The Spring AI BOM manages dependency versions. The MCP WebMVC starter registers the
 annotated `BuildTools` methods and exposes them over Streamable HTTP at `/mcp`.
@@ -51,7 +52,7 @@ three-second connection timeout and a five-second read timeout per request.
 ## AI tool routing (backend service)
 
 `BedrockToolRouter.route(AssistantRequest)` sends a transcript and selected repository
-to Nova Lite using Bedrock Converse tool calling. All four approved read-only tools
+to Nova Lite using Bedrock Converse tool calling. All five approved read-only tools
 are exposed, alongside internal `clarify_request` and `explain_pipeline` decisions that
 are never dispatched to MCP. The result is an `AssistantResponse` containing either one validated tool
 call or a controlled clarification/general explanation with no calls. The router does not execute MCP
@@ -140,8 +141,44 @@ AWS_PROFILE=abdullah-dev AWS_REGION=us-east-2 RUN_BEDROCK_TESTS=true \
 This makes a billable request with sample failure details; it does not verify live
 GitHub log downloads or the full MCP-to-Bedrock flow.
 
+## Bounded investigation
+
+`investigate_failure` reads only the first page of 100 latest-attempt jobs and selects
+one failed/timed-out job. Its log tail is capped at 6000 characters. The run's head SHA
+and head repository are checked before source access; fork-head source is skipped.
+The first 30 changed files of the single head commit are considered, ranking filenames
+mentioned in the log ahead of others, then reading up to three eligible source/test
+or `.github/workflows` files at that immutable SHA. This is not a full PR diff or a
+search through unchanged files. Removed files retain a patch without source.
+
+Each patch/source excerpt is at most 2000 characters; raw source over 16 KiB is omitted.
+JSON requests read at most 1 MiB plus one overflow byte; no source pagination, repository
+clone, arbitrary model-selected URL, or write operation is performed. Common credential
+filenames and unsafe paths are excluded, but this does not guarantee secret redaction.
+Only analyze repositories authorized for sending selected code and logs to Bedrock.
+
+The analyzer makes one structured Nova Lite call, with a 25-second total SDK timeout,
+700 output-token limit, and 30000-character evidence ceiling. Non-structured text is
+discarded; required report fields and internal-markup checks reject unsafe output.
+Repository text is treated as untrusted evidence, not instructions. Coverage limits are
+also appended by the server, independently of the model. Missing source access retains
+log/job evidence; empty jobs and invalid requests bypass analysis. The browser permits
+100 seconds for this MCP call. Routing is a separate bounded model call. Semantic
+accuracy and prompt-injection resistance still require live evaluation; hypotheses
+are not proof of causation.
+
+The GitHub integration uses [workflow-run metadata](https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28),
+[commit files](https://docs.github.com/en/rest/commits/commits?apiVersion=2022-11-28),
+and [repository contents at a ref](https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28).
+Fine-grained tokens need Actions read for workflow evidence and Contents read for code.
+
+Regression tests cover immutable SHA access, fork refusal, filename priority, access
+failures, source/patch/response limits, forced structured analysis, reasoning rejection,
+no-result bypass, and discovery/invocation through the actual HTTP MCP transport.
+
 ## Still to add
 
 - End-to-end verification of `summarize_failure` through MCP with live GitHub evidence.
 - Alexa+ integration and end-to-end voice testing.
 - More targeted excerpts for failures outside the final log segment.
+- Full PR/unchanged-file investigation beyond the bounded single-head-commit analysis.

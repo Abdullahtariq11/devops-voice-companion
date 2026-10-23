@@ -1,6 +1,7 @@
 package com.abdullah.devopsvoicecompanion.tools;
 
 import com.abdullah.devopsvoicecompanion.bedrock.BedrockSummarizer;
+import com.abdullah.devopsvoicecompanion.bedrock.BedrockFailureInvestigator;
 import com.abdullah.devopsvoicecompanion.github.GitHubClient;
 import com.abdullah.devopsvoicecompanion.github.GitHubJob;
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -25,16 +26,20 @@ import java.util.stream.Collectors;
 public class BuildTools {
   private final GitHubClient gitHubClient;
   private final BedrockSummarizer bedrockSummarizer;
+  private final BedrockFailureInvestigator investigator;
 
   /**
    * Creates tools backed by the GitHub API client.
    *
    * @param gitHubClient client supplied by Spring
    * @param bedrockSummarizer service that explains failures using Nova Lite
+   * @param investigator service that investigates bounded logs and source evidence
    */
-  public BuildTools(GitHubClient gitHubClient, BedrockSummarizer bedrockSummarizer) {
+  public BuildTools(GitHubClient gitHubClient, BedrockSummarizer bedrockSummarizer,
+      BedrockFailureInvestigator investigator) {
     this.gitHubClient = gitHubClient;
     this.bedrockSummarizer = bedrockSummarizer;
+    this.investigator = investigator;
   }
 
   /**
@@ -241,6 +246,45 @@ public class BuildTools {
   }
 
   /**
+   * Investigates one failed job using longer logs and up to three changed files at the run SHA.
+   * Performs one bounded AI analysis, never writes code, and preserves partial-evidence notices.
+   *
+   * @param owner GitHub owner
+   * @param repo repository name
+   * @param runId positive workflow run ID
+   * @return evidence-backed observations, uncertain cause, next check, and limitations
+   */
+  @McpTool(name = "investigate_failure", description = "Investigate a failure in depth using logs, head-commit patches and source excerpts. Read-only; returns observations, possible cause, next check and limitations.")
+  public String investigateFailure(
+      @McpToolParam(description = "GitHub owner", required = true) String owner,
+      @McpToolParam(description = "Repository name", required = true) String repo,
+      @McpToolParam(description = "Workflow run ID", required = true) long runId) {
+    if (owner == null || repo == null || !owner.matches("[A-Za-z0-9][A-Za-z0-9-]{0,38}")
+        || !repo.matches("[A-Za-z0-9._-]{1,100}") || repo.equals(".") || repo.equals("..")) {
+      return "Please provide a valid GitHub owner and repository.";
+    }
+    FailureDetails details = collectFailureDetails(owner, repo, runId, 1, 6000);
+    if (!details.summarizable()) {
+      return details.text();
+    }
+    String source;
+    try {
+      source = gitHubClient.getRunSourceEvidence(owner, repo, runId, details.text());
+    } catch (RestClientException exception) {
+      source = "Commit/source evidence unavailable: check repository Contents read permission or try again later.";
+    }
+    String coverage = "\n\nInvestigation coverage: one failed job from the first 100 latest-attempt jobs; log tail up to 6000 characters; "
+        + "at most three changed files from the first 30 files of the single head commit. "
+        + "Not an entire-repository or PR analysis; causes remain hypotheses.\n";
+    try {
+      return investigator.investigate(details.text() + coverage + source) + coverage;
+    } catch (SdkException | IllegalStateException exception) {
+      return "I collected failure evidence, but couldn't produce a reliable investigation. "
+          + "Try again or ask for the failure logs.";
+    }
+  }
+
+  /**
    * Collects bounded failure evidence for reuse by log and summary tools.
    * Validation errors, empty results, and GitHub request failures bypass summarization.
    * Failed-job metadata remains summarizable even when individual logs are unavailable.
@@ -251,24 +295,30 @@ public class BuildTools {
    * @return failure evidence or a message marked to bypass Bedrock
    */
   private FailureDetails collectFailureDetails(String owner, String repo, long runId) {
+    return collectFailureDetails(owner, repo, runId, 5, 1500);
+  }
+
+  private FailureDetails collectFailureDetails(String owner, String repo, long runId, int jobLimit, int logLimit) {
     if (runId < 1) {
       return new FailureDetails("Please provide a positive workflow run ID.", false);
     }
 
     try {
       var failedJobs =
-          gitHubClient.getJobs(owner, repo, runId).stream()
+          (jobLimit == 1 ? gitHubClient.getInvestigationJobs(owner, repo, runId)
+              : gitHubClient.getJobs(owner, repo, runId)).stream()
               .filter(
                   job -> "failure".equals(job.conclusion()) || "timed_out".equals(job.conclusion()))
               .toList();
       if (failedJobs.isEmpty()) {
         return new FailureDetails(
-            "No failed jobs found for run " + runId + " on " + owner + "/" + repo + ".", false);
+            "No failed jobs found " + (jobLimit == 1 ? "in the first 100 latest-attempt jobs " : "")
+                + "for run " + runId + " on " + owner + "/" + repo + ".", false);
       }
 
       StringBuilder output =
           new StringBuilder("Failure details for " + owner + "/" + repo + ", run " + runId + ".\n");
-      for (GitHubJob job : failedJobs.stream().limit(5).toList()) {
+      for (GitHubJob job : failedJobs.stream().limit(jobLimit).toList()) {
         output
             .append("\nJob: ")
             .append(job.name())
@@ -288,7 +338,7 @@ public class BuildTools {
           } else {
             output
                 .append("Log excerpt:\n")
-                .append(gitHubClient.getJobLogs(owner, repo, job.id(), 1500))
+                .append(gitHubClient.getJobLogs(owner, repo, job.id(), logLimit))
                 .append('\n');
           }
         } catch (RestClientResponseException exception) {
@@ -302,8 +352,9 @@ public class BuildTools {
           break;
         }
       }
-      if (failedJobs.size() > 5) {
-        output.append("\nOnly the first five failed jobs are included.");
+      if (failedJobs.size() > jobLimit) {
+        output.append(jobLimit == 5 ? "\nOnly the first five failed jobs are included."
+            : "\nOnly the first failed job is included in this investigation.");
       }
       if (output.length() > 10_000) {
         return new FailureDetails(output.substring(0, 9981) + "\n[Output truncated]", true);

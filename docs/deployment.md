@@ -60,12 +60,16 @@ disconnect and change the server URL when testing another deployment.
 
 1. Verify Railway `/actuator/health` returns `UP`.
 2. Open the Vercel production page and connect to Railway `/mcp` with the server bearer token.
-3. Confirm four tools are discovered; select Start talking.
+3. Confirm five tools are discovered; select Start talking.
 4. Enter a repository accessible to the configured GitHub token.
 5. Type “How’s the build?” and verify real tool activity and a GitHub response.
 6. Type “Why did the latest build fail?” and verify `get_failed_runs` followed by
    `summarize_failure`, or an honest no-failures/access-error response.
 7. Follow up with “Explain that failure” and check that the known run is reused.
+   Then ask “Investigate that failure in depth”: verify `investigate_failure`, observations,
+   an explicitly uncertain cause, a next check, and coverage limits. Give the backend
+   GitHub token **Contents: read** in addition to **Actions: read** for source inspection.
+   If access/logs are missing, the response must acknowledge the limitation rather than guess.
 8. Test microphone permission, the preferred voice, read-aloud interruption, the typed
    fallback, help navigation, and a mobile-width screen.
 9. Verify an incorrect server token is rejected. Check CORS from the actual deployed origin.

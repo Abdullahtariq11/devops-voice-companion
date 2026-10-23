@@ -5,6 +5,7 @@ const examples = [
   ['What failed recently?', 'get_failed_runs'],
   ['Show the failure logs', 'get_failure_logs'],
   ['Why did the latest build fail?', 'summarize_failure'],
+  ['Investigate that failure in depth', 'investigate_failure'],
 ]
 
 export default function GuideScreen({ onBack }: { onBack: () => void }) {

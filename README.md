@@ -60,6 +60,24 @@ routing and remains useful as a fallback.
 Try: “Is the build green?”, “What failed recently?”, “Why did the latest build fail?”,
 then “Show the logs for that failure.” Missing or inaccessible logs remain a stated limitation.
 
+### Deeper failure investigation
+
+Ask **“Investigate that failure in depth”** or **“Investigate the latest failure”**.
+The read-only `investigate_failure` tool combines a longer log excerpt with up to
+three changed source/test/workflow files and patches pinned to the run's head SHA.
+It returns observations, a possible cause (not confirmed), one next diagnostic check,
+and explicit coverage limits. It can recognize an intentionally simulated workflow
+failure when the provided evidence shows one; it does not invent missing test code.
+
+This first version inspects one failed job from the first 100 latest-attempt jobs and
+the first 30 files of a **single head commit**, not the full PR or unchanged source.
+Fork-head source is skipped. Source/patch excerpts can be truncated or unavailable.
+The GitHub token needs **Actions: read** and **Contents: read** on the selected repository.
+Selected source excerpts, patches and logs are sent to Bedrock; only connect repositories
+you are authorized to analyze. Filename filtering is not a secret-redaction guarantee.
+No files are edited, builds rerun, or fixes applied. Investigation may take longer than
+a normal summary, so wait for it to finish before asking another question.
+
 ## Connecting to a protected server
 
 The website can be public while its MCP backend requires a private **server bearer token**.

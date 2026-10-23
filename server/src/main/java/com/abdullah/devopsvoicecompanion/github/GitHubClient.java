@@ -15,6 +15,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Comparator;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Reads GitHub Actions runs, jobs, and bounded log excerpts.
@@ -234,5 +237,121 @@ public class GitHubClient {
     }
 
     return response.workflowRuns().stream().map(GitHubWorkflowRun::toGitHubRun).toList();
+  }
+
+  /**
+   * Reads up to three changed source/test/workflow files at the failed run's immutable head SHA.
+   * Only the first 30 files of that single commit are considered, ranked by names in the logs.
+   * Fork runs are skipped rather than querying another repository. No model-selected URLs are used.
+   * Each patch and source excerpt is limited to 2000 characters; partial access stays explicit.
+   *
+   * @param owner selected repository owner
+   * @param repo selected repository name
+   * @param runId positive workflow run ID
+   * @param logs bounded failure evidence used to rank changed filenames
+   * @return bounded evidence, including coverage and missing-source notices
+   */
+  public String getRunSourceEvidence(String owner, String repo, long runId, String logs) {
+    if (runId < 1) {
+      throw new IllegalArgumentException("Run ID must be positive.");
+    }
+    String base = "/repos/" + owner + "/" + repo;
+    JsonNode run = boundedJson(base + "/actions/runs/" + runId);
+    String sha = run.path("head_sha").asText("");
+    if (!sha.matches("[a-fA-F0-9]{40}")
+        || !(owner + "/" + repo).equalsIgnoreCase(run.path("head_repository").path("full_name").asText(""))) {
+      return "Source unavailable: run head SHA or same-repository head could not be verified.";
+    }
+    JsonNode commit = boundedJson(base + "/commits/" + sha + "?per_page=30");
+    List<JsonNode> candidates = new ArrayList<>();
+    for (JsonNode file : commit.path("files")) {
+      String path = file.path("filename").asText("");
+      if (safeSourcePath(path)) {
+        candidates.add(file);
+      }
+      if (candidates.size() == 30) {
+        break;
+      }
+    }
+    candidates.sort(Comparator.comparingInt(file -> {
+      String path = file.path("filename").asText();
+      String name = path.substring(path.lastIndexOf('/') + 1).replaceFirst("\\.[^.]+$", "");
+      return logs.contains(name) ? 0 : 1;
+    }));
+    StringBuilder evidence = new StringBuilder("Head commit: " + sha
+        + "\nCoverage: first 30 changed files of this single commit only, not the entire PR or repository."
+        + " Source excerpts may be truncated; unchanged files are not searched.\n");
+    for (JsonNode file : candidates.stream().limit(3).toList()) {
+      String path = file.path("filename").asText();
+      evidence.append("\nFile: ").append(path).append(" at ").append(sha).append('\n');
+      evidence.append("Patch excerpt:\n").append(excerpt(file.path("patch").asText("Patch unavailable."))).append('\n');
+      if ("removed".equals(file.path("status").asText())) {
+        evidence.append("Source unavailable: file deleted in this commit.\n");
+        continue;
+      }
+      try {
+        String source = restClient.get()
+            .uri(builder -> builder.path(base + "/contents/").pathSegment(path.split("/"))
+                .queryParam("ref", sha).build())
+            .header("Accept", "application/vnd.github.raw+json")
+            .exchange((request, response) -> {
+              if (response.getStatusCode().value() != 200) {
+                throw new RestClientException("Source unavailable.");
+              }
+              byte[] bytes = response.getBody().readNBytes(16_385);
+              if (bytes.length > 16_384) {
+                return "Source omitted: exceeds 16 KiB limit.";
+              }
+              String text = new String(bytes, StandardCharsets.UTF_8);
+              return text.indexOf('\0') >= 0 ? "Binary source omitted." : excerpt(text);
+            });
+        evidence.append("Source excerpt (from line 1):\n").append(source).append('\n');
+      } catch (RestClientException exception) {
+        evidence.append("Source unavailable: access denied, missing, or request failed.\n");
+      }
+    }
+    if (candidates.isEmpty()) {
+      evidence.append("No eligible changed source/test/workflow files found in this page.\n");
+    }
+    return evidence.toString();
+  }
+
+  /** Reads only the first 100 latest-attempt jobs for a bounded investigation, without pagination. */
+  public List<GitHubJob> getInvestigationJobs(String owner, String repo, long runId) {
+    if (runId < 1) {
+      throw new IllegalArgumentException("Run ID must be positive.");
+    }
+    var response = JsonMapper.builder().build().treeToValue(boundedJson("/repos/" + owner + "/" + repo
+        + "/actions/runs/" + runId + "/jobs?filter=latest&per_page=100&page=1"), GitHubJobsResponse.class);
+    return response == null || response.jobs() == null ? List.of() : response.jobs().stream().limit(100).toList();
+  }
+
+  private JsonNode boundedJson(String path) {
+    return restClient.get().uri(path).exchange((request, response) -> {
+      if (response.getStatusCode().value() != 200) {
+        throw new RestClientException("GitHub evidence unavailable.");
+      }
+      byte[] bytes = response.getBody().readNBytes(1_048_577);
+      if (bytes.length > 1_048_576) {
+        throw new RestClientException("GitHub evidence exceeds the response limit.");
+      }
+      try {
+        return JsonMapper.builder().build().readTree(bytes);
+      } catch (tools.jackson.core.JacksonException exception) {
+        throw new RestClientException("GitHub returned malformed evidence.");
+      }
+    });
+  }
+
+  private boolean safeSourcePath(String path) {
+    return path.length() <= 300 && path.matches("[A-Za-z0-9_./-]+")
+        && !List.of(path.split("/")).contains("..")
+        && !path.toLowerCase(java.util.Locale.ROOT).matches(".*(?:secret|credential|token|password|\\.env).*")
+        && (path.matches(".*\\.(?:java|kt|ts|tsx|js|jsx|py|go|rs|cs)$")
+            || path.matches("\\.github/workflows/[A-Za-z0-9_-]+\\.ya?ml"));
+  }
+
+  private String excerpt(String text) {
+    return text.length() <= 2000 ? text : text.substring(0, 1978) + "\n[Excerpt truncated]";
   }
 }
