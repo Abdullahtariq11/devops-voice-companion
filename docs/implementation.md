@@ -51,21 +51,34 @@ three-second connection timeout and a five-second read timeout per request.
 ## AI tool routing (backend service)
 
 `BedrockToolRouter.route(AssistantRequest)` sends a transcript and selected repository
-to Nova Lite using Bedrock Converse tool calling. Initially, only `get_build_status`
-is exposed. The result is an `AssistantResponse` containing either one validated tool
+to Nova Lite using Bedrock Converse tool calling. All four approved read-only tools
+are exposed. The result is an `AssistantResponse` containing either one validated tool
 call or a conversational clarification with no calls. The router does not execute MCP
 tools, retrieve GitHub data, or report a build result itself.
 
-Messages are limited to 2000 characters. Repository names are validated before calling
-AWS. Tool responses must name the approved tool and supply exactly `owner` and `repo`
-for the selected repository; unknown tools, extra arguments, cross-repository calls,
+Messages are limited to 2000 characters, with up to six 4000-character history entries.
+Repository names are validated before calling AWS. Tool responses must name an approved
+tool and supply `owner` and `repo` for the selected repository, with only approved
+optional `limit` or `runId` fields. Unknown tools, extra arguments, cross-repository calls,
 multiple calls, and truncated or empty responses are rejected. Model text alongside a
 tool request is discarded rather than treated as verified build evidence. Requests have
 a 30-second overall timeout and a 15-second attempt timeout.
 
-The routing service is not yet exposed as an HTTP endpoint or connected to frontend
-speech input. The existing frontend command matching remains in use until that wiring
-is implemented. Clarification wording and relevance are model-generated, not guaranteed.
+`POST /api/assistant/route` exposes this plan to the browser. Both typed and spoken
+questions use it; phrase matching has been removed. The browser validates the plan again
+and executes it on the existing MCP session. When a failure tool omits `runId`, the
+browser calls `get_failed_runs` with limit 1, extracts the first returned ID, and only then
+executes the requested tool. No failed runs or a GitHub error returns directly without
+inventing an ID. This is bounded dependency resolution, not an unlimited autonomous agent.
+Follow-ups carry previous conversational text and a known run ID. Model-proposed IDs must
+appear in the current question or supplied context. Raw logs are not read aloud verbatim.
+
+The API admits at most four simultaneous model requests per server instance. Provider
+errors are sanitized. CORS accepts explicit `FRONTEND_ORIGINS` for MCP and the routing API.
+`APP_AUTH_TOKEN` protects both endpoints when set; `APP_ENV=production` requires a token.
+See [deployment](deployment.md) for the required production configuration. The controller
+does not implement multi-user authentication or distributed rate limiting. Clarification
+wording and relevance are model-generated, not guaranteed.
 
 Run its mocked tests without making live AWS calls:
 

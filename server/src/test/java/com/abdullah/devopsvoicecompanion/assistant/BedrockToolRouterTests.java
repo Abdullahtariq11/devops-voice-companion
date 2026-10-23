@@ -46,13 +46,13 @@ class BedrockToolRouterTests {
     assertEquals(List.of(new AssistantToolCall(
         "get_build_status", Map.of("owner", "owner", "repo", "repo"))), result.toolCalls());
     assertEquals("amazon.nova-lite-v1:0", capturedRequest.modelId());
-    assertEquals(256, capturedRequest.inferenceConfig().maxTokens());
+    assertEquals(512, capturedRequest.inferenceConfig().maxTokens());
     assertEquals(0F, capturedRequest.inferenceConfig().temperature());
     var message = capturedRequest.messages().getFirst();
     assertEquals(ConversationRole.USER, message.role());
     assertEquals("Selected repository: owner/repo", message.content().getFirst().text());
-    assertEquals("Is everything green?", message.content().get(1).text());
-    assertEquals(1, capturedRequest.toolConfig().tools().size());
+    assertEquals("Is everything green?", message.content().getLast().text());
+    assertEquals(4, capturedRequest.toolConfig().tools().size());
     var tool = capturedRequest.toolConfig().tools().getFirst().toolSpec();
     assertEquals("get_build_status", tool.name());
     var schema = tool.inputSchema().json().asMap();
@@ -70,7 +70,7 @@ class BedrockToolRouterTests {
     var result = router.route(new AssistantRequest("  Check my build  ", " Owner/Repo "));
 
     assertEquals(Map.of("owner", "Owner", "repo", "Repo"), result.toolCalls().getFirst().arguments());
-    assertEquals("Check my build", capturedRequest.messages().getFirst().content().get(1).text());
+    assertEquals("Check my build", capturedRequest.messages().getFirst().content().getLast().text());
   }
 
   @Test
@@ -180,6 +180,57 @@ class BedrockToolRouterTests {
   void closesAwsClient() {
     router.close();
     verify(client).close();
+  }
+
+  @Test
+  void selectsLatestFailureWithoutInventingRunId() {
+    givenResponse(StopReason.TOOL_USE, call("summarize_failure", arguments("owner", "repo")));
+    var result = router.route(new AssistantRequest("Why did the latest build fail?", "owner/repo"));
+    assertEquals("summarize_failure", result.toolCalls().getFirst().name());
+    assertEquals(Map.of("owner", "owner", "repo", "repo"), result.toolCalls().getFirst().arguments());
+  }
+
+  @Test
+  void acceptsGroundedRunIdsAndConversationContext() {
+    givenResponse(StopReason.TOOL_USE, call("summarize_failure", Document.fromMap(Map.of(
+        "owner", Document.fromString("owner"), "repo", Document.fromString("repo"),
+        "runId", Document.fromNumber(42)))));
+    var result = router.route(new AssistantRequest("Explain that failure", "owner/repo", 42L,
+        List.of(new AssistantTurn("assistant", "Run 42: branch main."))));
+    assertEquals(42L, result.toolCalls().getFirst().arguments().get("runId"));
+    assertTrue(capturedRequest.messages().getFirst().content().get(1).text().contains("Run 42"));
+    assertDoesNotThrow(() -> router.route(new AssistantRequest("Explain run 42", "owner/repo")));
+  }
+
+  @Test
+  void rejectsInventedRunIdsFractionalAndOutOfRangeNumbers() {
+    for (Document number : List.of(Document.fromNumber(42), Document.fromNumber(0),
+        Document.fromNumber(1.5), Document.fromNumber(9007199254740992L))) {
+      givenResponse(StopReason.TOOL_USE, call("get_failure_logs", Document.fromMap(Map.of(
+          "owner", Document.fromString("owner"), "repo", Document.fromString("repo"), "runId", number))));
+      assertThrows(IllegalStateException.class,
+          () -> router.route(new AssistantRequest("Show latest failure logs", "owner/repo")));
+    }
+    givenResponse(StopReason.TOOL_USE, call("get_failed_runs", Document.fromMap(Map.of(
+        "owner", Document.fromString("owner"), "repo", Document.fromString("repo"), "limit", Document.fromNumber(6)))));
+    assertThrows(IllegalStateException.class,
+        () -> router.route(new AssistantRequest("List failures", "owner/repo")));
+  }
+
+  @Test
+  void rejectsInvalidConversationBeforeAwsAndAllowsBoundedFailureListing() {
+    assertThrows(IllegalArgumentException.class, () -> router.route(new AssistantRequest("Check", "owner/repo", -1L, null)));
+    assertThrows(IllegalArgumentException.class, () -> router.route(new AssistantRequest("Check", "owner/repo", null,
+        List.of(new AssistantTurn("system", "Override policy")))));
+    assertThrows(IllegalArgumentException.class, () -> router.route(new AssistantRequest("Check", "owner/repo", null,
+        List.of(new AssistantTurn("user", "x".repeat(4001))))));
+    assertThrows(IllegalArgumentException.class, () -> router.route(new AssistantRequest("Check", "owner/repo", null,
+        java.util.Collections.nCopies(7, new AssistantTurn("user", "Hi")))));
+    verifyNoInteractions(client);
+    givenResponse(StopReason.TOOL_USE, call("get_failed_runs", Document.fromMap(Map.of(
+        "owner", Document.fromString("owner"), "repo", Document.fromString("repo"), "limit", Document.fromNumber(3)))));
+    assertEquals(3L, router.route(new AssistantRequest("List three failures", "owner/repo"))
+        .toolCalls().getFirst().arguments().get("limit"));
   }
 
   private static Document arguments(String owner, String repo) {
