@@ -41,6 +41,93 @@ class GitHubClientTests {
   }
 
   @Test
+  void sourceEvidenceUsesImmutableRunShaAndPrioritizesLogReferencedFiles() {
+    String sha = "a".repeat(40);
+    expectRunHead(sha, "owner/repo");
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/commits/" + sha + "?per_page=30"))
+        .andRespond(withSuccess("""
+            {"files":[
+              {"filename":"src/Other.java","patch":"+other"},
+              {"filename":"src/PaymentServiceTest.java","patch":"-100\\n+90"},
+              {"filename":".env","patch":"secret"},
+              {"filename":"src/Credentials.java","patch":"secret"},
+              {"filename":"../outside.java","patch":"unsafe"}
+            ]}
+            """, MediaType.APPLICATION_JSON));
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/contents/src/PaymentServiceTest.java?ref=" + sha))
+        .andExpect(header("Accept", "application/vnd.github.raw+json"))
+        .andRespond(withSuccess("assertEquals(100, total);", MediaType.TEXT_PLAIN));
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/contents/src/Other.java?ref=" + sha))
+        .andRespond(withForbiddenRequest());
+
+    String result = client.getRunSourceEvidence("owner", "repo", 42, "PaymentServiceTest failed");
+
+    assertTrue(result.contains(sha));
+    assertTrue(result.contains("assertEquals(100, total)"));
+    assertTrue(result.contains("Source unavailable"));
+    assertTrue(result.indexOf("File: src/PaymentServiceTest") < result.indexOf("File: src/Other"));
+    assertFalse(result.contains("secret"));
+    assertFalse(result.contains("unsafe"));
+    api.verify();
+    downloads.verify();
+  }
+
+  @Test
+  void sourceEvidenceDoesNotFollowForksOrUnverifiedHeads() {
+    expectRunHead("b".repeat(40), "another/fork");
+    assertTrue(client.getRunSourceEvidence("owner", "repo", 42, "logs").contains("could not be verified"));
+    api.verify();
+  }
+
+  @Test
+  void sourceEvidenceCapsFilesAndOmitsLargeSource() {
+    String sha = "a".repeat(40);
+    expectRunHead(sha, "owner/repo");
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/commits/" + sha + "?per_page=30"))
+        .andRespond(withSuccess("{\"files\":[{\"filename\":\"One.java\",\"patch\":\"" + "p".repeat(5000)
+            + "\"},{\"filename\":\"Two.java\"},{\"filename\":\"Three.java\",\"status\":\"removed\"},"
+            + "{\"filename\":\"Four.java\"}]}", MediaType.APPLICATION_JSON));
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/contents/One.java?ref=" + sha))
+        .andRespond(withSuccess("x".repeat(16385), MediaType.TEXT_PLAIN));
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/contents/Two.java?ref=" + sha))
+        .andRespond(withSuccess("y".repeat(3000), MediaType.TEXT_PLAIN));
+
+    String result = client.getRunSourceEvidence("owner", "repo", 42, "logs");
+    assertTrue(result.contains("exceeds 16 KiB"));
+    assertTrue(result.contains("file deleted"));
+    assertTrue(result.contains("[Excerpt truncated]"));
+    assertFalse(result.contains("File: Four.java"));
+    assertFalse(result.contains("p".repeat(2001)));
+    assertTrue(result.length() < 14000);
+    api.verify();
+  }
+
+  @Test
+  void rejectsOversizedCommitResponse() {
+    String sha = "a".repeat(40);
+    expectRunHead(sha, "owner/repo");
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/commits/" + sha + "?per_page=30"))
+        .andRespond(withSuccess("x".repeat(1048577), MediaType.APPLICATION_JSON));
+    assertThrows(RestClientException.class, () -> client.getRunSourceEvidence("owner", "repo", 42, "logs"));
+    api.verify();
+  }
+
+  @Test
+  void investigationJobsDoesNotPaginateAndPreservesFailureMetadata() {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs/42/jobs?filter=latest&per_page=100&page=1"))
+        .andRespond(withSuccess("{\"total_count\":200,\"jobs\":[{\"id\":123,\"name\":\"Tests\",\"conclusion\":\"failure\"}]}",
+            MediaType.APPLICATION_JSON));
+    assertEquals("Tests", client.getInvestigationJobs("owner", "repo", 42).getFirst().name());
+    api.verify();
+  }
+
+  private void expectRunHead(String sha, String repository) {
+    api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs/42"))
+        .andRespond(withSuccess("{\"head_sha\":\"" + sha + "\",\"head_repository\":{\"full_name\":\""
+            + repository + "\"}}", MediaType.APPLICATION_JSON));
+  }
+
+  @Test
   void mapsLatestRunFromGithubJson() {
     api.expect(requestTo("https://api.github.com/repos/owner/repo/actions/runs?per_page=1"))
         .andRespond(withSuccess("""
@@ -306,7 +393,8 @@ class GitHubClientTests {
         .andRespond(withResourceNotFound());
 
     String result = new BuildTools(client,
-        mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS)))
+        mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS)),
+        mock(com.abdullah.devopsvoicecompanion.bedrock.BedrockFailureInvestigator.class))
         .getFailureLogs("owner", "repo", 42);
 
     assertTrue(result.contains("Job: Tests (failure)"));
@@ -328,7 +416,8 @@ class GitHubClientTests {
         .andRespond(withResourceNotFound());
 
     String result = new BuildTools(client,
-        mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS)))
+        mock(BedrockSummarizer.class, withSettings().mockMaker(MockMakers.SUBCLASS)),
+        mock(com.abdullah.devopsvoicecompanion.bedrock.BedrockFailureInvestigator.class))
         .getFailureLogs("owner", "repo", 42);
 
     assertTrue(result.length() <= 10_000);

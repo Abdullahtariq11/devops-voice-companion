@@ -60,6 +60,13 @@ See the [browser speech recognition documentation](https://developer.mozilla.org
 
 ## Deployment
 
+Ask “Investigate that failure in depth” to use `investigate_failure` after a summary,
+or “Investigate the latest failure” to resolve the latest failed run automatically.
+The backend must expose the new tool; reconnect after redeploying to discover five tools.
+The report separates observations, possible cause, next check and coverage limits.
+It inspects bounded changed-file evidence, not the entire repository, and never edits code.
+Backend GitHub credentials need Contents read as well as Actions read; no new frontend secret is needed.
+
 Use Vercel with Root Directory `frontend`, Vite preset, `npm ci`, `npm run build`, and output `dist`.
 Set the public `VITE_MCP_SERVER_URL` to the Railway HTTPS `/mcp` endpoint; `.env.example` shows
 the expected format. Enter the private server bearer token in the Connect form, never a `VITE_*`

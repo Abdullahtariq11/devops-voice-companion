@@ -40,6 +40,9 @@ class ServerApplicationTests {
   private BedrockSummarizer summarizer;
 
   @MockitoBean
+  private com.abdullah.devopsvoicecompanion.bedrock.BedrockFailureInvestigator investigator;
+
+  @MockitoBean
   private BedrockToolRouter toolRouter;
 
   private McpSyncClient client;
@@ -60,9 +63,9 @@ class ServerApplicationTests {
   }
 
   @Test
-  void discoversAllFourToolsWithRequiredInputs() {
+  void discoversAllFiveToolsWithRequiredInputs() {
     var tools = client.listTools().tools();
-    assertEquals(Set.of("get_build_status", "get_failed_runs", "get_failure_logs", "summarize_failure"),
+    assertEquals(Set.of("get_build_status", "get_failed_runs", "get_failure_logs", "summarize_failure", "investigate_failure"),
         tools.stream().map(McpSchema.Tool::name).collect(Collectors.toSet()));
     var summaryTool = tools.stream().filter(tool -> tool.name().equals("summarize_failure"))
         .findFirst().orElseThrow();
@@ -125,6 +128,23 @@ class ServerApplicationTests {
     assertFalse(Boolean.TRUE.equals(result.isError()));
     assertEquals("The payment test expected 100 but received 90.", text(result));
     verify(summarizer).summarize(eq("owner/repo"), contains("Expected 100, actual 90."));
+  }
+
+  @Test
+  void invokesInvestigationThroughMcpWithBoundedEvidence() {
+    when(github.getInvestigationJobs("owner", "repo", 42)).thenReturn(List.of(
+        new GitHubJob(123L, "Tests", "completed", "failure", List.of())));
+    when(github.getJobLogs("owner", "repo", 123, 6000)).thenReturn("Expected 100, actual 90.");
+    when(github.getRunSourceEvidence(eq("owner"), eq("repo"), eq(42L), anyString()))
+        .thenReturn("File: Test.java at failed run SHA");
+    when(investigator.investigate(anyString())).thenReturn("Observed mismatch. Cause not confirmed.");
+    var result = client.callTool(new McpSchema.CallToolRequest("investigate_failure",
+        Map.of("owner", "owner", "repo", "repo", "runId", 42)));
+    assertFalse(Boolean.TRUE.equals(result.isError()));
+    assertTrue(text(result).contains("Observed mismatch"));
+    assertTrue(text(result).contains("Investigation coverage"));
+    verify(investigator).investigate(contains("Test.java"));
+    verifyNoInteractions(summarizer);
   }
 
   private String text(McpSchema.CallToolResult result) {
